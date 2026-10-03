@@ -120,6 +120,44 @@ ContentIntelligenceEngine.analyze(item)      sangyan/intelligence/pipeline.py
 
 ---
 
+## 7. Authoritative Verification & Trust Binding Execution Flow
+
+```text
+ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
+ ├─ 1. Cache Check                              sangyan/verification/cache.py
+ │   └─ SHA3-256(source_id + query_type + val)  avoids repeated upstream lookups
+ ├─ 2. Adapter Execution Pipeline
+ │   ├─ SEBIVerificationAdapter                 sangyan/verification/adapters/sebi.py
+ │   │   ├─ queries SEBI snapshot               INZ, INA, INH, INP, INM, IN-DP, MF
+ │   │   ├─ validates registration status       ACTIVE vs EXPIRED vs CANCELLED vs BOGUS
+ │   │   └─ adversarial override                exact bogus registration overrides brand name match
+ │   ├─ MCAVerificationAdapter                  sangyan/verification/adapters/mca.py
+ │   │   ├─ queries MCA snapshot                21-character CIN validation
+ │   │   └─ validates corporate status          ACTIVE vs STRUCK_OFF vs DISSOLVED vs UNREGISTERED
+ │   ├─ CircularsVerificationAdapter            sangyan/verification/adapters/circulars.py
+ │   │   ├─ evaluates prohibited assertions     guaranteed returns (SEBI/HO/MIRSD), OTP solicitation
+ │   │   └─ maps regulatory bans                returns CONTRADICTED + authoritative circular excerpt
+ │   └─ OfficialDomainsVerificationAdapter      sangyan/verification/adapters/official_domains.py
+ │       ├─ checks official registry            legitimate financial infrastructure
+ │       ├─ evaluates phishing blacklist        lookalike domains (e.g. zerodha-profit.cc)
+ │       └─ checks suspicious TLDs              high-risk TLD warnings (.xyz, .top, .vip)
+ ├─ 3. Deterministic Conflict Resolution
+ │   ├─ Opposing outcomes (SUPPORTED + CONTRADICTED) -> resolves to CONFLICTING
+ │   └─ Persists dual opposing evidence items with complete provenance
+ ├─ 4. Stance & Finding Synthesis
+ │   ├─ maps to 5 epistemic stances             SUPPORTED, CONTRADICTED, CONFLICTING, OUTDATED, INSUFFICIENT_EVIDENCE
+ │   ├─ constructs domain Evidence objects      canonical SHA3-256 hashes, source links, confidence
+ │   └─ synthesizes domain Finding objects      factual determination, reasoning, and context
+ ├─ 5. Post-Quantum Trust Binding               sangyan/verification/trust_binding.py
+ │   ├─ builds canonical verification payload   finding_id, claim_id, stance, statement, evidence_hashes
+ │   ├─ signs payload with ML-DSA-65            pure Python dilithium-py post-quantum digital signature
+ │   └─ generates signed TrustReceipt           cryptographically anchors verification determination
+ └─ 6. Scoped Atomic Persistence                sangyan/tenancy/repository.py
+     └─ stores Evidence, Findings, and Receipts inside tenant isolation boundary
+```
+
+---
+
 ## Session Changelog
 
 | Area | Change | Files | Commit | Decision |
@@ -135,11 +173,19 @@ ContentIntelligenceEngine.analyze(item)      sangyan/intelligence/pipeline.py
 | Trust Service | Implement TrustReceipt and ML-DSA-65 signing/verification service | `sangyan/trust/receipt.py`, `sangyan/trust/service.py` | 4dbd278 | D-002, D-005 |
 | Test Suite | Implement comprehensive 37 unit and integration tests | `tests/test_*.py` | 4dbd278 | D-001..D-008 |
 | Concurrency & Persistence | Enable SQLite WAL mode, ConfidenceVector idempotency, and full CRUD in TenantRepository | `sangyan/database/engine.py`, `sangyan/domain/models.py`, `sangyan/tenancy/repository.py`, `tests/test_persistence.py` | 42bbef2 | D-009 |
-| Ingestion & Text Normalization | Implement zero-width stripping, HTML cleaning, NFKC normalization, URL extraction | `sangyan/ingest/cleaner.py` | Pending | D-010 |
-| SSRF-Safe Fetching | Implement bounded streaming HTTP fetcher with redirect re-verification | `sangyan/ingest/fetcher.py`, `sangyan/ingest/service.py` | Pending | D-011 |
-| Multilingual Identification | Script analysis and Devanagari Hindi/Marathi + Hinglish identification with combining-mark tokenizer | `sangyan/intelligence/language.py` | Pending | D-010 |
-| Claim & Entity Extraction | Atomic claim decomposition and SEBI/CIN/UPI/Channel entity extraction | `sangyan/intelligence/claims.py`, `sangyan/intelligence/entities.py` | Pending | D-012 |
-| Safety Signals & Hard Negatives | 20+ signal detectors with disclaimer/warning contextual suppression | `sangyan/intelligence/signals.py`, `sangyan/intelligence/pipeline.py` | Pending | D-013 |
-| Phase 2 Test Suite | 27 new tests (ingest, language, claims, entities, signals, stress tests) bringing total to 64 tests | `tests/test_ingest.py`, `tests/test_intelligence.py` | Pending | D-010..D-013 |
+| Ingestion & Text Normalization | Implement zero-width stripping, HTML cleaning, NFKC normalization, URL extraction | `sangyan/ingest/cleaner.py` | d395cfe | D-010 |
+| SSRF-Safe Fetching | Implement bounded streaming HTTP fetcher with redirect re-verification | `sangyan/ingest/fetcher.py`, `sangyan/ingest/service.py` | d395cfe | D-011 |
+| Multilingual Identification | Script analysis and Devanagari Hindi/Marathi + Hinglish identification with combining-mark tokenizer | `sangyan/intelligence/language.py` | d395cfe | D-010 |
+| Claim & Entity Extraction | Atomic claim decomposition and SEBI/CIN/UPI/Channel entity extraction | `sangyan/intelligence/claims.py`, `sangyan/intelligence/entities.py` | d395cfe | D-012 |
+| Safety Signals & Hard Negatives | 20+ signal detectors with disclaimer/warning contextual suppression | `sangyan/intelligence/signals.py`, `sangyan/intelligence/pipeline.py` | d395cfe | D-013 |
+| Phase 2 Test Suite | 27 new tests (ingest, language, claims, entities, signals, stress tests) bringing total to 64 tests | `tests/test_ingest.py`, `tests/test_intelligence.py` | d395cfe | D-010..D-013 |
+| Authoritative Source Registry | Seed registry of SEBI, MCA, Exchanges, Circulars, Domains with trust tiers | `sangyan/verification/sources.py` | Pending | D-014 |
+| Versioned Snapshots | SHA3-256 verified registry snapshots and SnapshotManager | `sangyan/verification/snapshots.py` | Pending | D-016 |
+| Verification Caching & Rate Limiting | In-memory SHA3-256 TTL caching and sliding-window rate limiting | `sangyan/verification/cache.py` | Pending | D-021 |
+| Verification Adapters | SEBI intermediary, MCA CIN, Circulars, and Official Domain adapters | `sangyan/verification/adapters/` | Pending | D-015, D-017 |
+| Post-Quantum Trust Binding | ML-DSA-65 digital signing of findings, claims, and evidence digests | `sangyan/verification/trust_binding.py` | Pending | D-020 |
+| Claim Verification Engine | Orchestration, conflict resolution, epistemic stances, and repository persistence | `sangyan/verification/engine.py` | Pending | D-018, D-019 |
+| Phase 3 Test Suite | 18 new verification tests (adapters, conflict resolution, PQC trust, cross-tenant isolation, adversarial evasion) bringing total to 82 tests | `tests/test_verification.py` | Pending | D-014..D-021 |
+
 
 

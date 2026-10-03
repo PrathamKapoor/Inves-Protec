@@ -182,4 +182,125 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: High signal precision with rigorous verification against hard negative test cases.
 - Files: `sangyan/intelligence/signals.py`, `sangyan/intelligence/pipeline.py`, `tests/test_intelligence.py`
 
+---
+
+### D-014: Authoritative Source Registry Architecture
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Financial claim verification must ground all assessments strictly in curated, authoritative institutional sources rather than open-ended LLM knowledge or untrusted web crawling. Sources must have explicit trust tiers (T0 Regulator to T5 User-generated), reliability scores, update frequencies, and schema identifiers.
+- Decision: Implemented `AuthoritativeSourceRegistry` (`sangyan/verification/sources.py`) initialized with curated Indian financial market seed sources:
+  1. `src_sebi_intermediaries`: Tier 0 SEBI Intermediaries Registry (Brokers, Investment Advisers, Research Analysts, Depositories, Mutual Funds).
+  2. `src_sebi_circulars`: Tier 0 Official SEBI Circulars & Regulatory Advisories.
+  3. `src_mca_registry`: Tier 0 Ministry of Corporate Affairs Registry (Company CIN & LLP verification).
+  4. `src_nse_members`: Tier 1 NSE Member Directory.
+  5. `src_bse_members`: Tier 1 BSE Member Directory.
+  6. `src_official_domains`: Tier 0 Curated Financial Domain & Phishing List.
+  7. `src_rbi_entities`: Tier 0 Reserve Bank of India Regulated Entities.
+- Why: Provides an auditable, controlled registry preventing arbitrary external references from influencing verification findings.
+- Alternatives considered: Dynamic ad-hoc web searches for verification (rejected: vulnerable to SEO-manipulated scam pages, phishing domains, and non-authoritative forums).
+- Consequences: All verification adapters query registered authoritative sources with deterministic provenance.
+- Files: `sangyan/verification/sources.py`, `tests/test_verification.py`
+
+---
+
+### D-015: Controlled Multi-Source Verification Adapters
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Claim verification requires domain-specific adapters capable of parsing and querying heterogeneous authoritative records (SEBI registration certificates, MCA CIN corporate records, regulatory circular bans, and official domain registries).
+- Decision: Implemented abstract base adapter `VerificationAdapter` and 4 concrete verification adapters in `sangyan/verification/adapters/`:
+  1. `SEBIVerificationAdapter`: Validates SEBI registration numbers (INZ, INA, INH, INM, INP, IN-DP, MF) and intermediary names. Correctly distinguishes active, expired, cancelled, suspended, and bogus registrations. Exact registration mismatches strictly override name-similarity lookups to defeat brand-spoofing attacks.
+  2. `MCAVerificationAdapter`: Validates 21-character Corporate Identification Numbers (CINs) and company names, verifying status (ACTIVE, STRUCK_OFF, DISSOLVED, UNREGISTERED).
+  3. `CircularsVerificationAdapter`: Matches claims and signals against official regulatory circulars (e.g. SEBI prohibition of guaranteed returns under SEBI/HO/MIRSD, prohibition of OTP/credential solicitation under SEBI/HO/ISD, fraudulent fee demands, and statutory disclaimers).
+  4. `OfficialDomainsVerificationAdapter`: Performs domain-level verification, authenticating genuine financial domains, blocking lookalike/phishing domains (`zerodha-profit.cc`, `sebi-approval.xyz`), and flagging high-risk TLDs (.xyz, .top, .vip).
+- Why: Modular, single-responsibility adapters provide deterministic verification logic with zero hallucination.
+- Alternatives considered: A single monolithic verification class (rejected: brittle, difficult to test and maintain).
+- Consequences: Each adapter produces structured `AdapterResult` records with explicit stance, confidence, and evidence payloads.
+- Files: `sangyan/verification/adapters/base.py`, `sangyan/verification/adapters/sebi.py`, `sangyan/verification/adapters/mca.py`, `sangyan/verification/adapters/circulars.py`, `sangyan/verification/adapters/official_domains.py`, `tests/test_verification.py`
+
+---
+
+### D-016: Versioned Registry Snapshots with SHA3-256 Integrity
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Institutional registries update continuously (brokers get suspended, new circulars are issued). To ensure investigations remain reproducible and legally verifiable over time, the system must support versioned snapshots with cryptographic integrity verification.
+- Decision: Implemented `RegistrySnapshot` and `SnapshotManager` (`sangyan/verification/snapshots.py`):
+  1. Snapshots contain source ID, semantic version (e.g. `2026.03.01`), entry count, data payload, and a canonical SHA3-256 integrity hash.
+  2. `verify_integrity()` recalculates canonical JSON SHA3-256 hash over snapshot entries and raises `VerificationIntegrityError` if any entry has been altered.
+  3. Default seed snapshots are bundled for SEBI intermediaries, MCA companies, regulatory circulars, and official domains.
+- Why: Guarantees immutable, reproducible investigation baselines that can withstand court scrutiny or compliance audits.
+- Alternatives considered: Querying live unversioned remote endpoints without caching snapshots (rejected: tests and verification reproducibility would break when upstream websites change).
+- Consequences: Investigations link findings to exact snapshot versions and integrity hashes.
+- Files: `sangyan/verification/snapshots.py`, `tests/test_verification.py`
+
+---
+
+### D-017: Epistemic Stances & Temporal Verification (Active vs Outdated)
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Financial claims cannot be evaluated on a simplistic true/false binary. Registrations expire or are cancelled; regulatory rules evolve; evidence may be conflicting or insufficient.
+- Decision: Standardized on 5 mutually exclusive verification stances:
+  1. `SUPPORTED`: Claim is directly corroborated by active authoritative records (e.g., active SEBI registration matching intermediary name).
+  2. `CONTRADICTED`: Claim is explicitly refuted by authoritative records (e.g., bogus registration number, struck-off company, or guaranteed return promise prohibited by circular).
+  3. `CONFLICTING`: Multiple authoritative sources or valid records present contradictory evidence.
+  4. `OUTDATED`: Claim was valid in the past but has expired or been cancelled/suspended (e.g. expired SEBI broker registration `INZ000999999` valid 2018-2022 but expired).
+  5. `INSUFFICIENT_EVIDENCE`: No authoritative records exist to definitively support or contradict the claim.
+- Why: Provides nuanced, legally defensible, and actionable intelligence to investors and investigators.
+- Alternatives considered: Binary boolean `is_valid` flag (rejected: conflates expired licenses with active scams, and unverified entities with confirmed fraudulent ones).
+- Consequences: Downstream guidance engines can distinguish between active fraud and administrative expiry.
+- Files: `sangyan/domain/models.py`, `sangyan/verification/adapters/`, `sangyan/verification/engine.py`, `tests/test_verification.py`
+
+---
+
+### D-018: Multi-Source Conflict Resolution & Transparency
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: When verifying claims across multiple adapters or registries, sources may yield opposing stances (e.g. one source indicates support while another indicates contradiction). Suppressing one source or taking an arbitrary average misleads investigators.
+- Decision: Implemented deterministic conflict resolution in `ClaimVerificationEngine` (`sangyan/verification/engine.py`):
+  1. If adapters yield both `SUPPORTED` and `CONTRADICTED` outcomes without an overriding authoritative contradiction, the claim stance resolves to `CONFLICTING`.
+  2. Dual contradictory evidence items are persisted to the database, explicitly recording opposing claims and findings.
+  3. Adversarial precedence rule: In entity registration verification, an explicit contradictory registration check strictly overrides a fuzzy name similarity match to defeat brand spoofing.
+- Why: Total transparency ensures investigators see both sides of conflicting records rather than an artificial consensus.
+- Alternatives considered: Majority voting among adapters (rejected: a scammer could register a bogus MCA name to outvote a genuine SEBI cancellation).
+- Consequences: Investigators receive full visibility into conflicting claims with complete provenance.
+- Files: `sangyan/verification/engine.py`, `tests/test_verification.py`
+
+---
+
+### D-019: Traceable Evidence & Finding Provenance
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Every claim verification must produce an immutable chain of custody linking the user content, atomic claim, extracted entity, authoritative source, raw retrieved excerpt, evaluation stance, and resulting finding.
+- Decision: In `ClaimVerificationEngine`:
+  1. For every adapter result, a domain `Evidence` entity is created, populated with source ID, title, excerpt, URL/identifier, canonical SHA3-256 content hash, and confidence vector.
+  2. A domain `Finding` entity is created summarizing the factual determination, stance, confidence vector, and reasoning.
+  3. All entities are tenant-scoped and persisted atomically through `TenantRepository`.
+  4. Cross-tenant isolation is strictly maintained; verification results cannot leak across tenant boundaries.
+- Why: Enables complete auditability and defensibility of every assertion made by the platform.
+- Alternatives considered: Persisting only the final finding without intermediate evidence objects (rejected: destroys evidentiary chain of custody).
+- Consequences: Every finding in SANGYAN can be traced back to exact authoritative evidence records.
+- Files: `sangyan/verification/engine.py`, `sangyan/domain/models.py`, `tests/test_verification.py`
+
+---
+
+### D-020: ML-DSA-65 Post-Quantum Trust Binding for Verification Findings
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Findings and evidence must be tamper-evident. If a database record or investigation report is altered after the fact, the system must cryptographically detect and reject the tampering.
+- Decision: Implemented `TrustBindingService` (`sangyan/verification/trust_binding.py`):
+  1. Assembles a canonical JSON verification payload containing `finding_id`, `claim_id`, `stance`, `finding_statement`, `confidence_vector`, `evidence_hashes`, `verified_at`, and `tenant_id`.
+  2. Signs the canonical payload using pure-Python ML-DSA-65 (`dilithium-py`) post-quantum digital signature.
+  3. Generates a signed `TrustReceipt` linking the verification event to the investigator or system identity.
+  4. `verify_finding_integrity()` recalculates the canonical payload and verifies the ML-DSA-65 signature against the public key, immediately detecting any payload or statement tampering.
+- Why: Provides quantum-resistant, non-repudiable proof of verification determinations.
+- Alternatives considered: Traditional ECDSA/RSA signatures (rejected: vulnerable to Shor's algorithm; project standard mandates ML-DSA-65 post-quantum cryptography).
+- Consequences: Any modification to a finding's stance, statement, or evidence invalidates its post-quantum signature.
+- Files: `sangyan/verification/trust_binding.py`, `tests/test_verification.py`
+
+---
+
+### D-021: Verification Caching & Upstream Rate Limiting
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Authoritative registries and APIs have rate limits, and redundant verification of popular entities (e.g. checking Zerodha's SEBI registration thousands of times) exhausts network and compute resources.
+- Decision: Implemented in-memory caching and sliding-window rate limiting (`sangyan/verification/cache.py`):
+  1. `VerificationCache`: Thread-safe, TTL-based caching keyed by canonical SHA3-256 hash of `(source_id, query_type, query_val)`.
+  2. `RateLimiter`: Sliding-window rate limiter per source with exponential backoff on retryable upstream failures.
+- Why: Protects authoritative sources from request spikes while maintaining sub-second verification response times for frequently verified entities.
+- Alternatives considered: Unbounded caching without TTL (rejected: stale data risks) or no caching (rejected: upstream rate limits exceeded).
+- Consequences: Fast, resilient verification lookups with configurable TTL and rate limit governance.
+- Files: `sangyan/verification/cache.py`, `tests/test_verification.py`
+
+
 
