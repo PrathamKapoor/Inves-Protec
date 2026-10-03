@@ -39,12 +39,19 @@ Phase 1 — Foundation Setup, Repository Migration & Investor-Safety Domain Mode
 - `tests/test_trust.py`
 
 ## 4. Current Architecture / State
-The repository has a working, tested, standalone foundation:
+The repository has a working, tested, standalone foundation and complete Content Intelligence Engine:
 - Package: `sangyan` (installed in editable mode in Python 3.13 venv)
 - Database: Migration 001 creates 16 core relational tables for tenancy, content items, claims, entities, sources, evidence, signals, findings, guidance, investigations, reviews, and trust receipts.
 - Cryptography: Pure-Python ML-DSA-65 (`dilithium-py`) + SHA3-256 canonical JSON.
 - Security: Socket-level SSRF validation with private/loopback/link-local IP blocking.
-- Tenancy: `TenantRepository` enforcing organization boundaries and RBAC permissions.
+- Tenancy: `TenantRepository` enforcing organization boundaries and RBAC permissions with full CRUD coverage.
+- Ingestion (`sangyan.ingest`): Text cleaning (zero-width character stripping, HTML extraction, Unicode NFKC, whitespace normalization), link extraction, and SSRF-safe bounded HTTP retrieval (`UrlFetcher`).
+- Content Intelligence (`sangyan.intelligence`):
+  - Multilingual identification (`LanguageDetector`) across English, Hindi (Devanagari), Hinglish (Romanized Hindi), Marathi, Gujarati, Bengali, Tamil, Telugu, and Kannada with Indic combining-mark preserving tokenization.
+  - Atomic claim decomposition (`ClaimExtractor`) splitting compound clauses into regulatory, return, urgency, payment, affiliation, or other claims with UNVERIFIED default status and context pointers.
+  - Financial entity resolution (`EntityResolver`) extracting SEBI registration numbers (INZ, INA, INH, INP, INM, IN-DP, MF), Corporate CINs, Indian UPI VPAs, Telegram/WhatsApp solicitations, statutory regulators, market infrastructure, and recognized brokers.
+  - Observable safety signals (`SignalDetector`) identifying 20+ signals with robust contextual negation and regulatory warning/disclaimer suppression.
+  - End-to-end orchestration (`ContentIntelligenceEngine`) computing weighted risk scores, generating summaries, and persisting analysis outputs to `TenantRepository`.
 
 ## 5. Decisions Made
 - D-001: Standalone SANGYAN Repository Initialization & Packaging Architecture
@@ -56,6 +63,10 @@ The repository has a working, tested, standalone foundation:
 - D-007: SSRF Protection & Network Boundary Foundation
 - D-008: Standard Library Socket-Level SSRF Interception without Mandatory External Dependencies
 - D-009: Repository CRUD Expansion, ConfidenceVector Idempotency & SQLite WAL Concurrency
+- D-010: Multilingual Text Normalization & Adversarial Evasion Architecture
+- D-011: Bounded SSRF-Safe HTTP Ingestion Service
+- D-012: Deterministic Financial Entity Resolution & Atomic Claim Decomposition
+- D-013: Contextual Negation & Hard-Negative Disclaimer Suppression in Signal Detection
 
 ## 6. Requirements and Constraints
 - Git authorship: strictly `PrathamKapoor <prathamkapoor027@gmail.com>`. No AI/model attribution.
@@ -66,28 +77,29 @@ The repository has a working, tested, standalone foundation:
 - Do not commit paper/, research/, *.tex.
 
 ## 7. Testing and Verification
-- Full test suite: **38 passed in 1.84s**, 0 failures, exit code 0 (`C:\Projects\SIH26\TRUST-SAT\.venv313repro\Scripts\python.exe -m pytest tests -v`).
+- Full test suite: **64 passed in 6.35s**, 0 failures, exit code 0 (`C:\Projects\SIH26\TRUST-SAT\.venv313repro\Scripts\python.exe -m pytest tests -v`).
 - `tests/test_crypto.py`: 3 passed (canonical JSON key sorting, SHA3-256 digest, ML-DSA-65 keygen/sign/verify/tamper detection).
 - `tests/test_database.py`: 4 passed (connect, query, duplicate entry, transaction rollback, migration runner idempotency).
 - `tests/test_domain.py`: 22 passed (all 10 domain models, enums, confidence vectors, validation error reporting).
+- `tests/test_ingest.py`: 7 passed (zero-width character stripping, HTML extraction, NFKC normalization, URL extraction, SSRF blocking, mocked HTTP fetch, IngestionService workflow).
+- `tests/test_intelligence.py`: 19 passed (English, Hindi, Marathi, Hinglish, Gujarati, Bengali, Tamil, empty text, claim decomposition, SEBI reg nos, CIN, UPI VPAs, channels/regulators, predatory signals, hard negatives on regulatory warnings, OTP advice, disclaimers, personal savings warnings, adversarial evasion countermeasures, large content throughput, and end-to-end pipeline persistence).
 - `tests/test_persistence.py`: 4 passed (tenant isolation, permission enforcement, investigation & review lifecycle, full repository CRUD).
 - `tests/test_security.py`: 3 passed (unsafe IP detection, URL shape validation, loopback blocking).
 - `tests/test_trust.py`: 2 passed (keypair persistence, document signing and post-quantum verification).
-- Editable installation: `pip install -e . --no-deps` completed successfully.
+- Editable installation: `pip install -e . --no-deps` verified.
 
 ## 8. Known Issues / Risks
-- None currently identified in Phase 1 foundation.
+- None identified in Phase 1 or Phase 2.
 
 ## 9. Unfinished Work
-- Phase 2: Ingestion & Content Intelligence Engine (multilingual language detection, claim decomposition, entity extraction, signal & persuasion extraction).
-- Phase 3: Authoritative Verification Adapters (SEBI registry queries, official circulars, URL reputation).
+- Phase 3: Authoritative Verification Adapters (SEBI intermediary registry seed/query, circulars, domain reputation).
 - Phase 4: Investigation Correlation, Scam-Chain Reconstruction & Safe Guidance.
 - Phase 5: LangGraph Workflow & Cryptographic Trust Pipeline.
 - Phase 6: REST API & Security.
 - Phase 7: Next.js Frontend.
 
 ## 10. Next Subphase
-Phase 2: Ingestion & Content Intelligence Engine (Text/URL ingestion, Language identification, Claim decomposition, Financial entity normalization, Observable signal detection).
+Phase 3: Authoritative Verification & Evidence Retrieval (Authoritative Seed Registry, Claim Verification Engine, SEBI/Exchange intermediary validation, Stance determination).
 
 ## 11. Critical Context
 - Target environment uses Python 3.13 venv at `C:\Projects\SIH26\TRUST-SAT\.venv313repro`.

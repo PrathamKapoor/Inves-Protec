@@ -107,7 +107,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-009: Repository CRUD Expansion, ConfidenceVector Idempotency & SQLite WAL Concurrency
-- Date / phase / commit: 2026-10-04, Phase 1 (Perfection Protocol)
+- Date / phase / commit: 2026-10-04, Phase 1 (Perfection Protocol), 42bbef2
 - Context: Post-Phase 1 audit identified three opportunities for hardening before pipeline implementation:
   1. `TenantRepository` possessed persistence methods for `ContentItem`, `Claim`, `Signal`, `Investigation`, and `Review`, but lacked full tenant-scoped CRUD methods for `Entity`, `Source`, `Evidence`, `Finding`, `ActionGuidance`, and investigation updates/listings.
   2. `ConfidenceVector.from_dict` assumed dictionary inputs, which raised errors if an already-deserialized `ConfidenceVector` instance was passed.
@@ -120,4 +120,66 @@ This file is an append-only record of architectural, domain, security, data, and
 - Alternatives considered: Deferring entity/source repository methods to Phase 3 (rejected: violative of the Persistent Completion & Perfection Protocol).
 - Consequences: All domain entities can be managed through the strictly scoped `TenantRepository` with validated domain rules and concurrency safety.
 - Files: `sangyan/database/engine.py`, `sangyan/domain/models.py`, `sangyan/tenancy/repository.py`, `tests/test_persistence.py`
+
+---
+
+### D-010: Multilingual Text Normalization & Adversarial Evasion Architecture
+- Date / phase / commit: 2026-10-04, Phase 2
+- Context: Fraudulent financial content frequently uses adversarial formatting (zero-width spaces `\u200b` between keywords, fullwidth or mathematical alphanumeric homoglyphs, embedded HTML markup, and mixed Indic scripts/Hinglish) to bypass naive string matching and regex filters.
+- Decision: Implemented a multi-stage text cleaning and language identification pipeline in `sangyan.ingest.cleaner` and `sangyan.intelligence.language`:
+  1. Strips zero-width and bidirectional control characters before pattern matching.
+  2. Extracts plain text from HTML while discarding script/style blocks and decoding entities.
+  3. Normalizes Unicode via NFKC (canonical decomposition followed by canonical composition).
+  4. Identifies scripts and languages across English, Hindi (Devanagari), Hinglish (Romanized Hindi), Marathi, Gujarati, Bengali, Tamil, Telugu, and Kannada.
+  5. Implements an Indic combining-mark preserving tokenizer (`[^\w\s\u0900-\u0D7F]`) to prevent breaking Devanagari vowel signs/matras during vocabulary analysis.
+- Why: Guarantees consistent canonical representations of submitted messages across diverse Indian languages and stops adversarial evasions.
+- Alternatives considered: Using external heavy LLM for language identification (rejected: adds latency, non-deterministic outputs, and external runtime dependencies for a basic classification task).
+- Consequences: Downstream intelligence extractors operate on normalized text with known language and script metadata.
+- Files: `sangyan/ingest/cleaner.py`, `sangyan/intelligence/language.py`, `tests/test_ingest.py`, `tests/test_intelligence.py`
+
+---
+
+### D-011: Bounded SSRF-Safe HTTP Ingestion Service
+- Date / phase / commit: 2026-10-04, Phase 2
+- Context: User-submitted suspicious investment URLs must be fetched to inspect landing pages, but fetching arbitrary URLs poses critical SSRF risks (accessing cloud metadata `169.254.169.254`, internal services `10.0.0.0/8`, `127.0.0.1`, DNS rebinding) and denial-of-service risks (compression bombs, infinite streaming, redirect loops).
+- Decision: Built `UrlFetcher` and `IngestionService` in `sangyan.ingest`:
+  1. Integrates socket-level interception (`ssrf_safe_connections()`) and preflight URL validation (`validate_url_ssrf`).
+  2. Bounded HTTP streaming with a hard limit of 2 MB (`MAX_SIZE_BYTES = 2097152`).
+  3. Strict timeouts (connect 3.0s, read 5.0s).
+  4. Manual redirect resolution verifying each redirect target against SSRF policy with a maximum of 3 hops.
+  5. Automatic extraction of page title, meta description, and plain text.
+  6. Computes SHA3-256 canonical hash over fetched content and stores a validated `ContentItem` through `TenantRepository`.
+- Why: Provides secure web crawling capabilities with rock-solid defense in depth against network boundary attacks.
+- Alternatives considered: Calling standard `requests.get(url, allow_redirects=True)` (rejected: vulnerable to TOCTOU DNS-rebinding and redirect SSRF bypasses).
+- Consequences: Content from suspicious links can be safely ingested into the platform without exposing host infrastructure.
+- Files: `sangyan/ingest/fetcher.py`, `sangyan/ingest/service.py`, `tests/test_ingest.py`
+
+---
+
+### D-012: Deterministic Financial Entity Resolution & Atomic Claim Decomposition
+- Date / phase / commit: 2026-10-04, Phase 2
+- Context: Compound promotional messages join multiple independent claims (e.g. regulatory license assertions, return promises, payment demands, urgency tactics). Conflating them prevents independent verification against authoritative registries.
+- Decision:
+  1. `ClaimExtractor` splits compound sentences on clause boundaries and conjunctions, categorizing each into `regulatory`, `return`, `urgency`, `payment`, `affiliation`, or `other`, with default status `UNVERIFIED` and context pointer metadata.
+  2. `EntityResolver` extracts SEBI registration formats (`INZ`, `INA`, `INH`, `INP`, `INM`, `IN-DP`, `MF`), Corporate CIN (`[LU][0-9]{5}...`), Indian UPI VPAs (`@okhdfcbank`, `@paytm`, `@ybl`, etc.), Telegram handles/invite links, WhatsApp invite links, statutory regulators (SEBI, RBI, IRDAI, MCA), market infrastructure (NSE, BSE, MCX, NSDL, CDSL), and recognized retail brokers.
+- Why: Decomposing content into discrete entities and claims enables 1-to-1 evidence mapping in Phase 3 verification.
+- Alternatives considered: Single binary classification of messages as "safe" vs "unsafe" (rejected: violates product design requirement to verify atomic assertions with transparent provenance).
+- Consequences: Every message yields granular claims and entities ready for registry lookups and evidence graph construction.
+- Files: `sangyan/intelligence/claims.py`, `sangyan/intelligence/entities.py`, `tests/test_intelligence.py`
+
+---
+
+### D-013: Contextual Negation & Hard-Negative Disclaimer Suppression in Signal Detection
+- Date / phase / commit: 2026-10-04, Phase 2
+- Context: Pattern-matching signal detection easily generates severe false positives on regulatory warnings, investor education, and statutory disclaimers. For instance, "SEBI warns investors against guaranteed returns" or "Never share your OTP" contain high-risk keywords but are protective advisories rather than predatory solicitations.
+- Decision: Implemented two-tier negation and context handling in `SignalDetector`:
+  1. Sentence-level warning detection (`WARNING_CONTEXT_PATTERNS` covering `beware`, `warns`, `advises`, `regulatory warning`, `do not share`, `never`, `subject to market risks`, `धोखाधड़ी से बचें`, `सावधान`). Sentences matching protective advisory intent suppress signal emission.
+  2. Immediate preceding negation detection (`NEGATION_PREFIXES` covering `not`, `never`, `no`, `without`, `don't`, `nahi`, `mat`).
+  3. Detects 20+ observable, factual signals (GUARANTEED_RETURN, HIGH_RETURN_PROMISE, URGENCY, SCARCITY, AUTHORITY_IMPERSONATION, WITHDRAWAL_FEE, OTP_REQUEST, CREDENTIAL_REQUEST, FAKE_PROFIT, SOCIAL_MEDIA_SOLICITATION, PRESSURE_LANGUAGE, SUSPICIOUS_URL, UNVERIFIED_APP, THIRD_PARTY_PAYMENT, UPI_MISMATCH).
+  4. `ContentIntelligenceEngine` computes a diminishing-returns risk score from signal severity weights and generates an evidence-grounded summary.
+- Why: Prevents the platform from falsely flagging genuine SEBI advisories or mutual fund statutory disclaimers as scams.
+- Alternatives considered: Simple regex matching without negation (rejected: unacceptably high false-positive rate on legitimate educational content).
+- Consequences: High signal precision with rigorous verification against hard negative test cases.
+- Files: `sangyan/intelligence/signals.py`, `sangyan/intelligence/pipeline.py`, `tests/test_intelligence.py`
+
 

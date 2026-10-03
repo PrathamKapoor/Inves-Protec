@@ -18,6 +18,11 @@ def sha3_digest(data: bytes) -> bytes:
     return hashlib.sha3_256(data).digest()
 
 
+def sha3_256_text(text: str) -> str:
+    """SHA3-256 hex digest of a UTF-8 text string."""
+    return sha3_hex(text.encode("utf-8"))
+
+
 def canonical_json(obj: Any) -> bytes:
     """Deterministic JSON encoding: sorted keys, compact separators, UTF-8.
 

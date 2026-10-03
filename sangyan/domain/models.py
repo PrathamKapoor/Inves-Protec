@@ -19,6 +19,8 @@ from sangyan.domain.base import CURRENT_SCHEMA_VERSION, new_id, require, validat
 CONTENT_TYPES = ("text", "url", "document", "image")
 PROCESSING_STATUSES = ("pending", "processing", "completed", "failed")
 
+CLAIM_TYPES = ("factual", "regulatory", "return", "urgency", "payment", "affiliation", "other")
+
 CLAIM_STATUSES = (
     "SUPPORTED",
     "CONTRADICTED",
