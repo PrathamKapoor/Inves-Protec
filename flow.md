@@ -79,3 +79,5 @@ URL Ingestion / Fetch
 | Security Hook | Universal socket-level connect hook without urllib3 dependency | `sangyan/security/ssrf.py` | 4dbd278 | D-008 |
 | Trust Service | Implement TrustReceipt and ML-DSA-65 signing/verification service | `sangyan/trust/receipt.py`, `sangyan/trust/service.py` | 4dbd278 | D-002, D-005 |
 | Test Suite | Implement comprehensive 37 unit and integration tests | `tests/test_*.py` | 4dbd278 | D-001..D-008 |
+| Concurrency & Persistence | Enable SQLite WAL mode, ConfidenceVector idempotency, and full CRUD in TenantRepository | `sangyan/database/engine.py`, `sangyan/domain/models.py`, `sangyan/tenancy/repository.py`, `tests/test_persistence.py` | Pending | D-009 |
+

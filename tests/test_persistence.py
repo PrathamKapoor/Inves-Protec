@@ -136,3 +136,89 @@ class TestTenantRepository:
         )
         rev_id = repo.record_review(rev)
         assert rev_id.startswith("rev_")
+
+        # List reviews for investigation
+        reviews = repo.list_reviews_for_investigation(inv_id)
+        assert len(reviews) == 1
+        assert reviews[0].id == rev_id
+
+        # Update investigation
+        repo.update_investigation(inv_id, status="COMPLETED", summary="Investigation completed", completed=True)
+        updated_inv = repo.get_investigation(inv_id)
+        assert updated_inv.status == "COMPLETED"
+        assert updated_inv.summary == "Investigation completed"
+        assert updated_inv.completed_at is not None
+
+        # List investigations
+        all_invs = repo.list_investigations()
+        assert len(all_invs) == 1
+        assert all_invs[0].id == inv_id
+
+    def test_full_repository_crud(self, seeded_tenancy):
+        repo = TenantRepository(seeded_tenancy["engine"], seeded_tenancy["org1"], seeded_tenancy["user1"])
+
+        # Content item and claims
+        item = ContentItem(
+            content_type="text",
+            raw_content="Invest with ABC Trading, SEBI reg INZ000123456, 100% guarantee",
+            organization_id=seeded_tenancy["org1"],
+        )
+        item_id = repo.save_content_item(item)
+        c1 = Claim(content_item_id=item_id, statement="ABC Trading is SEBI registered", claim_type="regulatory")
+        c2 = Claim(content_item_id=item_id, statement="100% guarantee", claim_type="return")
+        c1_id = repo.save_claim(c1)
+        c2_id = repo.save_claim(c2)
+
+        claims = repo.list_claims_for_content(item_id)
+        assert len(claims) == 2
+
+        # Signals
+        s1 = Signal(content_item_id=item_id, signal_type="GUARANTEED_RETURN", excerpt="100% guarantee")
+        s1_id = repo.save_signal(s1)
+        fetched_s = repo.get_signal(s1_id)
+        assert fetched_s.id == s1_id
+        signals = repo.list_signals_for_content(item_id)
+        assert len(signals) == 1
+
+        # Entities
+        from sangyan.domain.models import Entity, Source, Evidence, Finding, ActionGuidance
+        ent = Entity(name="ABC Trading", entity_type="BROKER", registration_number="INZ000123456")
+        ent_id = repo.save_entity(ent)
+        fetched_ent = repo.get_entity(ent_id)
+        assert fetched_ent.name == "ABC Trading"
+        assert len(repo.list_entities()) == 1
+
+        # Sources
+        src = Source(name="SEBI Registered Brokers Directory", authority_tier="T0_REGULATOR", url="https://www.sebi.gov.in")
+        src_id = repo.save_source(src)
+        fetched_src = repo.get_source(src_id)
+        assert fetched_src.name == "SEBI Registered Brokers Directory"
+        assert len(repo.list_sources()) == 1
+
+        # Evidence
+        evi = Evidence(source_id=src_id, claim_id=c1_id, excerpt="No such registration found", stance="CONTRADICTS")
+        evi_id = repo.save_evidence(evi)
+        fetched_evi = repo.get_evidence(evi_id)
+        assert fetched_evi.claim_id == c1_id
+        assert len(repo.list_evidence_for_claim(c1_id)) == 1
+
+        # Findings
+        fnd = Finding(
+            claim_id=c1_id,
+            statement="Entity is not registered with SEBI",
+            status="CONTRADICTED",
+            evidence_refs=[evi_id],
+            rationale="Registration number does not exist in SEBI directory",
+        )
+        fnd_id = repo.save_finding(fnd)
+        fetched_fnd = repo.get_finding(fnd_id)
+        assert fetched_fnd.status == "CONTRADICTED"
+        assert len(repo.list_findings_for_claim(c1_id)) == 1
+
+        # Action Guidance
+        gd = ActionGuidance(category="GRIEVANCE_SCORES", title="File SCORES Complaint", description="Report unauthorized broker to SEBI SCORES portal", official_url="https://scores.sebi.gov.in")
+        gd_id = repo.save_guidance(gd)
+        fetched_gd = repo.get_guidance(gd_id)
+        assert fetched_gd.category == "GRIEVANCE_SCORES"
+        assert len(repo.list_guidance("GRIEVANCE_SCORES")) == 1
+

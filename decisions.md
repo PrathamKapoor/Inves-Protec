@@ -103,3 +103,21 @@ This file is an append-only record of architectural, domain, security, data, and
 - Alternatives considered: Adding `urllib3` to dependencies (rejected: unnecessary extra dependency when standard library hook is cleaner and more universal).
 - Consequences: All network fetches scoped within `ssrf_safe_connections()` are protected against SSRF and DNS rebinding across all HTTP libraries.
 - Files: `sangyan/security/ssrf.py`
+
+---
+
+### D-009: Repository CRUD Expansion, ConfidenceVector Idempotency & SQLite WAL Concurrency
+- Date / phase / commit: 2026-10-04, Phase 1 (Perfection Protocol)
+- Context: Post-Phase 1 audit identified three opportunities for hardening before pipeline implementation:
+  1. `TenantRepository` possessed persistence methods for `ContentItem`, `Claim`, `Signal`, `Investigation`, and `Review`, but lacked full tenant-scoped CRUD methods for `Entity`, `Source`, `Evidence`, `Finding`, `ActionGuidance`, and investigation updates/listings.
+  2. `ConfidenceVector.from_dict` assumed dictionary inputs, which raised errors if an already-deserialized `ConfidenceVector` instance was passed.
+  3. Default SQLite file locking can cause contention between concurrent reader and writer threads in multi-user/multi-worker workloads.
+- Decision:
+  1. Implemented complete CRUD coverage in `TenantRepository` for all domain models (`save_entity`, `get_entity`, `list_entities`, `save_source`, `get_source`, `list_sources`, `save_evidence`, `get_evidence`, `list_evidence_for_claim`, `save_finding`, `get_finding`, `list_findings_for_claim`, `save_guidance`, `get_guidance`, `list_guidance`, `list_investigations`, `update_investigation`, `list_reviews_for_investigation`), enforcing tenant isolation via foreign key joins back to `sangyan_content_items.organization_id`.
+  2. Made `ConfidenceVector.from_dict()` idempotent so passing an existing `ConfidenceVector` returns it unchanged.
+  3. Configured `PRAGMA journal_mode = WAL;` and `PRAGMA busy_timeout = 5000;` on all SQLite connections in `SQLiteDatabaseEngine`.
+- Why: Ensures transactional robustness, concurrent access performance, and complete repository data-access methods for downstream analysis pipelines and API layers.
+- Alternatives considered: Deferring entity/source repository methods to Phase 3 (rejected: violative of the Persistent Completion & Perfection Protocol).
+- Consequences: All domain entities can be managed through the strictly scoped `TenantRepository` with validated domain rules and concurrency safety.
+- Files: `sangyan/database/engine.py`, `sangyan/domain/models.py`, `sangyan/tenancy/repository.py`, `tests/test_persistence.py`
+

@@ -55,6 +55,7 @@ The repository has a working, tested, standalone foundation:
 - D-006: Schema Migrations & Storage Primitives for Phase 1
 - D-007: SSRF Protection & Network Boundary Foundation
 - D-008: Standard Library Socket-Level SSRF Interception without Mandatory External Dependencies
+- D-009: Repository CRUD Expansion, ConfidenceVector Idempotency & SQLite WAL Concurrency
 
 ## 6. Requirements and Constraints
 - Git authorship: strictly `PrathamKapoor <prathamkapoor027@gmail.com>`. No AI/model attribution.
@@ -65,11 +66,11 @@ The repository has a working, tested, standalone foundation:
 - Do not commit paper/, research/, *.tex.
 
 ## 7. Testing and Verification
-- Full test suite: **37 passed in 2.44s**, 0 failures, exit code 0 (`C:\Projects\SIH26\TRUST-SAT\.venv313repro\Scripts\python.exe -m pytest tests -v`).
+- Full test suite: **38 passed in 1.84s**, 0 failures, exit code 0 (`C:\Projects\SIH26\TRUST-SAT\.venv313repro\Scripts\python.exe -m pytest tests -v`).
 - `tests/test_crypto.py`: 3 passed (canonical JSON key sorting, SHA3-256 digest, ML-DSA-65 keygen/sign/verify/tamper detection).
 - `tests/test_database.py`: 4 passed (connect, query, duplicate entry, transaction rollback, migration runner idempotency).
 - `tests/test_domain.py`: 22 passed (all 10 domain models, enums, confidence vectors, validation error reporting).
-- `tests/test_persistence.py`: 3 passed (tenant isolation, permission enforcement, investigation & review lifecycle).
+- `tests/test_persistence.py`: 4 passed (tenant isolation, permission enforcement, investigation & review lifecycle, full repository CRUD).
 - `tests/test_security.py`: 3 passed (unsafe IP detection, URL shape validation, loopback blocking).
 - `tests/test_trust.py`: 2 passed (keypair persistence, document signing and post-quantum verification).
 - Editable installation: `pip install -e . --no-deps` completed successfully.

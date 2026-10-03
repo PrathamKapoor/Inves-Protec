@@ -145,7 +145,9 @@ class ConfidenceVector:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ConfidenceVector":
+    def from_dict(cls, d: Any) -> "ConfidenceVector":
+        if isinstance(d, ConfidenceVector):
+            return d
         return cls(
             analytical_support=float(d["analytical_support"]),
             evidence_completeness=float(d["evidence_completeness"]),
