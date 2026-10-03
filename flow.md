@@ -69,13 +69,13 @@ URL Ingestion / Fetch
 
 | Area | Change | Files | Commit | Decision |
 |---|---|---|---|---|
-| Packaging & Repository | Initialize standalone repository and pyproject.toml | `pyproject.toml`, `.gitignore` | uncommitted | D-001 |
-| Cryptography | Port PQC ML-DSA-65 and SHA3-256 canonical hashing | `sangyan/crypto/hashing.py`, `sangyan/crypto/providers.py` | uncommitted | D-002 |
-| Database Engine | Port dual SQLite/PostgreSQL DatabaseEngine and transaction manager | `sangyan/database/engine.py` | uncommitted | D-003 |
-| Tenancy | Implement tenant/organization models and repository scoping | `sangyan/tenancy/models.py`, `sangyan/tenancy/repository.py` | uncommitted | D-004 |
-| Domain Models | Define 10 investor-safety domain dataclasses with validation | `sangyan/domain/base.py`, `sangyan/domain/models.py` | uncommitted | D-005 |
-| Migrations | Implement Migration 001 core tables and runner | `sangyan/database/migrations.py` | uncommitted | D-006 |
-| Security | Implement DNS-rebinding-safe SSRF URL validator | `sangyan/security/ssrf.py` | uncommitted | D-007 |
-| Security Hook | Universal socket-level connect hook without urllib3 dependency | `sangyan/security/ssrf.py` | uncommitted | D-008 |
-| Trust Service | Implement TrustReceipt and ML-DSA-65 signing/verification service | `sangyan/trust/receipt.py`, `sangyan/trust/service.py` | uncommitted | D-002, D-005 |
-| Test Suite | Implement comprehensive 37 unit and integration tests | `tests/test_*.py` | uncommitted | D-001..D-008 |
+| Packaging & Repository | Initialize standalone repository and pyproject.toml | `pyproject.toml`, `.gitignore` | 4dbd278 | D-001 |
+| Cryptography | Port PQC ML-DSA-65 and SHA3-256 canonical hashing | `sangyan/crypto/hashing.py`, `sangyan/crypto/providers.py` | 4dbd278 | D-002 |
+| Database Engine | Port dual SQLite/PostgreSQL DatabaseEngine and transaction manager | `sangyan/database/engine.py` | 4dbd278 | D-003 |
+| Tenancy | Implement tenant/organization models and repository scoping | `sangyan/tenancy/models.py`, `sangyan/tenancy/repository.py` | 4dbd278 | D-004 |
+| Domain Models | Define 10 investor-safety domain dataclasses with validation | `sangyan/domain/base.py`, `sangyan/domain/models.py` | 4dbd278 | D-005 |
+| Migrations | Implement Migration 001 core tables and runner | `sangyan/database/migrations.py` | 4dbd278 | D-006 |
+| Security | Implement DNS-rebinding-safe SSRF URL validator | `sangyan/security/ssrf.py` | 4dbd278 | D-007 |
+| Security Hook | Universal socket-level connect hook without urllib3 dependency | `sangyan/security/ssrf.py` | 4dbd278 | D-008 |
+| Trust Service | Implement TrustReceipt and ML-DSA-65 signing/verification service | `sangyan/trust/receipt.py`, `sangyan/trust/service.py` | 4dbd278 | D-002, D-005 |
+| Test Suite | Implement comprehensive 37 unit and integration tests | `tests/test_*.py` | 4dbd278 | D-001..D-008 |

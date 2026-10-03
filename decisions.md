@@ -5,7 +5,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-001: Standalone SANGYAN Repository Initialization & Packaging Architecture
-- Date / phase / commit: 2026-10-04, Phase 1, uncommitted
+- Date / phase / commit: 2026-10-04, Phase 1, 4dbd278
 - Context: The project requires transforming prior supervisory (SAT-SA-with-PQC) and content analysis architectures into a shippable, production-ready, standalone investor-safety platform called SANGYAN. The root directory `C:\Projects\Sangyan` was an uninitialized workspace.
 - Decision: Initialize a clean standalone Git repository in `C:\Projects\Sangyan` with Git author identity `PrathamKapoor <prathamkapoor027@gmail.com>`. Organize the core Python backend package under `sangyan/` with standard packaging via `pyproject.toml`, preserving clean modular separation (`sangyan.core`, `sangyan.crypto`, `sangyan.database`, `sangyan.domain`, `sangyan.tenancy`, `sangyan.security`, `sangyan.trust`).
 - Why: SANGYAN is an independent investor-safety product for Indian retail investors, requiring clean separation from legacy SOC/MLOps telemetry. Clean packaging ensures standard installation, deployability, and dependency isolation.
@@ -16,7 +16,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-002: Cryptographic Infrastructure Preservation (Pure Python ML-DSA-65 & SHA3-256)
-- Date / phase / commit: 2026-10-04, Phase 1, uncommitted
+- Date / phase / commit: 2026-10-04, Phase 1, 4dbd278
 - Context: Investor investigation records require tamper-evident cryptographic provenance and receipts that resist both classical and quantum computing attacks, without introducing fragile C-extension dependencies on Windows.
 - Decision: Port and reuse the post-quantum cryptographic primitives from SAT-SA (`dilithium-py` ML-DSA-65 and `kyber-py` ML-KEM-768) and standard library SHA3-256 (`hashlib.sha3_256`) along with deterministic canonical JSON serialization into `sangyan.crypto`.
 - Why: `dilithium-py 1.4.0` and `kyber-py 1.2.0` are pure-Python, verified thread-safe via serialized lock (`_PQC_LOCK`), and already installed and tested in the environment. Canonical JSON ensures identical byte serialization across platforms.
@@ -27,7 +27,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-003: Storage & Migration Architecture (Dual-Dialect DatabaseEngine SQLite/PostgreSQL)
-- Date / phase / commit: 2026-10-04, Phase 1, uncommitted
+- Date / phase / commit: 2026-10-04, Phase 1, 4dbd278
 - Context: SANGYAN must operate both in local/air-gapped environments (using SQLite) and in multi-tenant hosted environments (using PostgreSQL 16), with deterministic schema versioning and transactional safety.
 - Decision: Adopt the statement-level `DatabaseEngine` abstraction (`SQLiteDatabaseEngine` and `PostgresDatabaseEngine`) with `threading.RLock`, row-factories returning dicts, transactional context manager (`with engine.transaction():`), and linear migration tracking via `schema_migrations`.
 - Why: The existing `DatabaseEngine` has been battle-tested in SAT-SA with over 1300 tests. It avoids heavy ORM overhead, eliminates dialect discrepancies, and enables zero-dependency offline SQLite operation.
@@ -38,7 +38,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-004: Tenant Isolation & Multi-Tenancy Architecture
-- Date / phase / commit: 2026-10-04, Phase 1, uncommitted
+- Date / phase / commit: 2026-10-04, Phase 1, 4dbd278
 - Context: Investigations may contain sensitive user submissions or organization-specific review workflows. Cross-tenant leakage must be structurally impossible.
 - Decision: Implement mandatory `organization_id` tenancy scoping on all persisted investigation records (`sangyan_content_items`, `sangyan_investigations`, `sangyan_findings`, `sangyan_reviews`). Provide `TenantRepository` that binds caller identity and organization context, strictly validating permissions on every operation.
 - Why: Public-good investor safety platforms handling suspicious messages or user grievances must guarantee privacy and strict isolation.
@@ -49,7 +49,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-005: SANGYAN Investor-Safety Domain Model Definition
-- Date / phase / commit: 2026-10-04, Phase 1, uncommitted
+- Date / phase / commit: 2026-10-04, Phase 1, 4dbd278
 - Context: The platform requires domain models that represent investor content decomposition, claim verification, entity resolution, observable safety signals, and safe action guidance, replacing SAT-SA's SOC telemetry model.
 - Decision: Implement 10 core domain records in `sangyan.domain`:
   1. `ContentItem`: Raw content submitted (text, URL, doc) with SHA3-256 digest and media type.
@@ -70,7 +70,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-006: Schema Migrations & Storage Primitives for Phase 1
-- Date / phase / commit: 2026-10-04, Phase 1, uncommitted
+- Date / phase / commit: 2026-10-04, Phase 1, 4dbd278
 - Context: Durable persistence of the Phase 1 domain records and tenant data requires structured SQL tables across SQLite and PostgreSQL.
 - Decision: Create Migration 001 (`create_sangyan_core_tables`) defining:
   - `sangyan_organizations`, `sangyan_users`, `sangyan_memberships`, `sangyan_sessions`
@@ -85,7 +85,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-007: SSRF Protection & Network Boundary Foundation
-- Date / phase / commit: 2026-10-04, Phase 1, uncommitted
+- Date / phase / commit: 2026-10-04, Phase 1, 4dbd278
 - Context: Future ingestion will fetch URLs provided by users (e.g., suspicious investment sites). This poses severe SSRF (Server-Side Request Forgery) and DNS-rebinding risks to internal networks and cloud metadata services.
 - Decision: Port and integrate the dual-check SSRF protection module from the Sentiment system into `sangyan.security.ssrf`. It enforces scheme restrictions (`http`, `https`), blocked hostnames, private/loopback/link-local/multicast IP address rejections, and hooks socket connections to prevent DNS-rebinding time-of-check to time-of-use (TOCTOU) exploits.
 - Why: Production investor safety systems must be hardened against malicious link submissions.
@@ -96,7 +96,7 @@ This file is an append-only record of architectural, domain, security, data, and
 ---
 
 ### D-008: Standard Library Socket-Level SSRF Interception without Mandatory External Dependencies
-- Date / phase / commit: 2026-10-04, Phase 1, uncommitted
+- Date / phase / commit: 2026-10-04, Phase 1, 4dbd278
 - Context: `urllib3` is not bundled in all Python environments or when HTTP clients like `httpx` or standard library `urllib` are used. Tight coupling to `urllib3.util.connection` caused collection errors when `urllib3` was absent.
 - Decision: Intercept Python's standard library `socket.create_connection` in `sangyan.security.ssrf`, while conditionally hooking `urllib3.util.connection.create_connection` if `urllib3` is present.
 - Why: Python standard library `socket.create_connection` is the root TCP connect call used by all HTTP clients (urllib, httpcore, httpx, urllib3). Intercepting it at standard library level provides universal DNS-rebinding protection without requiring `urllib3` as a mandatory dependency.
