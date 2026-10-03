@@ -109,12 +109,37 @@ class ClaimVerificationEngine:
         for adapter in applicable_adapters:
             # Check rate limiter
             if not self.rate_limiter.allow_request(adapter.source_id):
+                results.append(
+                    AdapterResult(
+                        adapter_id=adapter.adapter_id,
+                        source_id=adapter.source_id,
+                        status="rate_limited",
+                        stance="INSUFFICIENT_EVIDENCE",
+                        excerpt=claim.statement[:200],
+                        rationale=f"Rate limit exceeded for authoritative source '{adapter.source_id}'. Request deferred.",
+                        confidence_score=0.0,
+                    )
+                )
                 continue
 
             # Attempt matching against associated entities first, or fallback to standalone claim
-            matched_entity = self._find_relevant_entity(claim, candidate_entities)
-            res = adapter.verify(claim, matched_entity)
-            results.append(res)
+            try:
+                matched_entity = self._find_relevant_entity(claim, candidate_entities)
+                res = adapter.verify(claim, matched_entity)
+                results.append(res)
+            except Exception as exc:
+                results.append(
+                    AdapterResult(
+                        adapter_id=adapter.adapter_id,
+                        source_id=adapter.source_id,
+                        status="source_unavailable",
+                        stance="INSUFFICIENT_EVIDENCE",
+                        excerpt=claim.statement[:200],
+                        rationale=f"Authoritative verification query failed: {exc}",
+                        confidence_score=0.0,
+                        metadata={"error": str(exc)},
+                    )
+                )
 
         # Epistemic stance determination and conflict resolution
         status, rationale, confidence_vector = self._resolve_stances(results)
@@ -178,11 +203,12 @@ class ClaimVerificationEngine:
             except Exception:
                 trust_receipt_id = None
 
-        # Persist through TenantRepository if provided
+        # Persist atomically through TenantRepository if provided
         if repository:
-            for ev in evidence_items:
-                repository.save_evidence(ev)
-            repository.save_finding(finding)
+            with repository._db.transaction():
+                for ev in evidence_items:
+                    repository.save_evidence(ev)
+                repository.save_finding(finding)
 
         return VerificationOutcome(
             claim_id=claim.id,
@@ -254,11 +280,16 @@ class ClaimVerificationEngine:
         return "INSUFFICIENT_EVIDENCE", rationale, conf
 
     def _find_relevant_entity(self, claim: Claim, entities: list[Entity]) -> Optional[Entity]:
-        """Find entity associated with the claim via identifier or name overlap."""
+        """Find entity associated with the claim via identifier, official URL, name, or alias overlap."""
         stmt = claim.statement.lower()
         for ent in entities:
             if ent.registration_number and ent.registration_number.lower() in stmt:
                 return ent
-            if ent.name.lower() in stmt:
+            if ent.official_url and ent.official_url.lower() in stmt:
                 return ent
-        return entities[0] if entities else None
+            if ent.name and ent.name.lower() in stmt:
+                return ent
+            for alias in ent.aliases:
+                if alias and alias.lower() in stmt:
+                    return ent
+        return None

@@ -337,3 +337,138 @@ class TestConflictResolutionAndTrust:
         assert res.status == "not_found"
         assert "INZ000000000" in res.excerpt
 
+    def test_adversarial_phishing_prepended_with_genuine_regulator_domain(self):
+        """Scammer mentions https://sebi.gov.in first to try to fool domain verification,
+        then includes a phishing lookalike http://zerodha-profit.cc.
+        The malicious lookalike domain must take precedence and emit CONTRADICTED.
+        """
+        snapshots = SnapshotManager()
+        adapter = OfficialDomainsVerificationAdapter(snapshots)
+
+        claim = Claim(
+            content_item_id="item_phish_spoof",
+            statement="Approved by https://sebi.gov.in! Join our VIP portal at http://zerodha-profit.cc/login.",
+            claim_type="other",
+        )
+        res = adapter.verify(claim)
+        assert res.stance == "CONTRADICTED"
+        assert "zerodha-profit.cc" in res.excerpt
+        assert "impersonating" in res.excerpt.lower()
+
+    def test_adversarial_guaranteed_return_with_fake_market_risk_disclaimer(self):
+        """Scammer promises guaranteed returns but tacks on a fake disclaimer.
+        The affirmative prohibited return promise must take precedence and emit CONTRADICTED.
+        """
+        snapshots = SnapshotManager()
+        adapter = CircularsVerificationAdapter(snapshots)
+
+        claim = Claim(
+            content_item_id="item_fake_disclaimer",
+            statement="Guaranteed 100% daily profit on stocks! Note: investments are subject to market risks.",
+            claim_type="return",
+        )
+        res = adapter.verify(claim)
+        assert res.stance == "CONTRADICTED"
+        assert "SEBI/HO/MIRSD" in res.excerpt
+
+    def test_adapter_exception_resilience_in_engine(self):
+        """Engine must not crash if an individual adapter raises an unexpected exception."""
+        engine = ClaimVerificationEngine()
+
+        class CrashingAdapter(VerificationAdapter):
+            def __init__(self):
+                super().__init__("adapter_crash", "src_crash")
+
+            def supports(self, claim):
+                return True
+
+            def verify(self, claim, entity=None, context=None):
+                raise ConnectionResetError("Remote authoritative server connection reset by peer")
+
+        engine.adapters = [CrashingAdapter()]
+        claim = Claim(content_item_id="item_crash", statement="Some financial assertion", claim_type="regulatory")
+        outcome = engine.verify_claim(claim)
+
+        assert outcome.status == "INSUFFICIENT_EVIDENCE"
+        assert len(outcome.adapter_results) == 1
+        assert outcome.adapter_results[0].status == "source_unavailable"
+        assert "connection reset" in outcome.adapter_results[0].rationale.lower()
+
+    def test_rate_limited_adapter_outcome_recording(self):
+        """Engine must record rate-limited adapter attempts rather than silently discarding them."""
+        engine = ClaimVerificationEngine()
+        engine.rate_limiter = RateLimiter(default_requests_per_sec=0.0)  # Always rate limit
+
+        claim = Claim(
+            content_item_id="item_rl",
+            statement="Zerodha Broking Limited is SEBI registered under INZ000031633.",
+            claim_type="regulatory",
+        )
+        outcome = engine.verify_claim(claim)
+        assert outcome.status == "INSUFFICIENT_EVIDENCE"
+        assert len(outcome.adapter_results) >= 1
+        assert any(r.status == "rate_limited" for r in outcome.adapter_results)
+
+    def test_domain_lookup_with_www_and_trailing_dots(self):
+        """Official domain lookups must match with or without 'www.' and trailing dots."""
+        snapshots = SnapshotManager()
+        rec1 = snapshots.lookup_official_domain("www.zerodha.com")
+        rec2 = snapshots.lookup_official_domain("zerodha.com.")
+        rec3 = snapshots.lookup_official_domain("https://www.nseindia.com/market-data")
+
+        assert rec1 is not None and rec1.get("canonical_name") == "Zerodha Broking Limited"
+        assert rec2 is not None and rec2.get("canonical_name") == "Zerodha Broking Limited"
+        assert rec3 is not None and rec3.get("canonical_name") == "National Stock Exchange of India"
+
+    def test_hyphenated_and_spaced_registration_numbers(self):
+        """SEBI and MCA adapters must normalize hyphenated or spaced identifiers."""
+        snapshots = SnapshotManager()
+        sebi_adapter = SEBIVerificationAdapter(snapshots)
+        mca_adapter = MCAVerificationAdapter(snapshots)
+
+        c_sebi = Claim(content_item_id="c1", statement="SEBI license INZ-000031633 is valid.", claim_type="regulatory")
+        res_sebi = sebi_adapter.verify(c_sebi)
+        assert res_sebi.stance == "SUPPORTED"
+        assert "INZ000031633" in res_sebi.excerpt
+
+        c_mca = Claim(content_item_id="c2", statement="MCA CIN U-74999-MH-2016-PTC-288123 registered.", claim_type="regulatory")
+        res_mca = mca_adapter.verify(c_mca)
+        assert res_mca.stance == "SUPPORTED"
+        assert "APEX CAPITAL" in res_mca.excerpt
+
+    def test_unrelated_claim_does_not_inherit_first_entity(self):
+        """In multi-entity content, an unrelated claim must not falsely inherit an earlier entity."""
+        engine = ClaimVerificationEngine()
+        e_zerodha = Entity(name="Zerodha Broking Limited", entity_type="broker", registration_number="INZ000031633")
+        c_unrelated = Claim(content_item_id="c_unrel", statement="Send payment to random phone number.", claim_type="payment")
+
+        matched = engine._find_relevant_entity(c_unrelated, [e_zerodha])
+        assert matched is None
+
+    def test_multithreaded_cache_and_rate_limiter_concurrency(self):
+        """Concurrent threads must safely query cache and rate limiter without race conditions."""
+        import threading
+        cache = VerificationCache(default_ttl_sec=10)
+        limiter = RateLimiter(default_requests_per_sec=100)
+        errors = []
+
+        def worker(w_id: int):
+            try:
+                for i in range(50):
+                    k = cache.make_key("src_concurrent", f"id_{w_id}_{i}")
+                    cache.set(k, {"val": i}, "src_concurrent")
+                    v = cache.get(k)
+                    assert v == {"val": i}
+                    limiter.allow_request("src_concurrent", max_rate=500)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(errors) == 0
+
+

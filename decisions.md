@@ -302,5 +302,29 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Fast, resilient verification lookups with configurable TTL and rate limit governance.
 - Files: `sangyan/verification/cache.py`, `tests/test_verification.py`
 
+---
+
+### D-022: Multi-Domain Threat Precedence, Disclaimer Evasion Defense, and Engine Fault Resilience
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Adversarial testing revealed evasion patterns:
+  1. Attackers prepending official regulator links (e.g. `https://sebi.gov.in`) before phishing links (`http://zerodha-profit.cc`) to trick naive single-URL parsers into reporting `SUPPORTED`.
+  2. Attackers appending statutory risk disclaimers ("mutual funds are subject to market risks") to illegal guaranteed return schemes to trigger disclaimer hard-negative suppression.
+  3. External network or parsing exceptions in custom adapters could crash the entire batch verification workflow.
+  4. Non-atomic database writes could persist orphan evidence if an exception occurred midway through saving findings.
+- Decision: Implemented multi-tier hardening across the verification subsystem:
+  1. `OfficialDomainsVerificationAdapter` scans all URLs and bare domains in claims; if ANY domain is malicious, lookalike, or utilizes high-risk TLDs (.top, .vip, .cc, .xyz), `CONTRADICTED` is immediately emitted, defeating prepended regulator URLs.
+  2. `SnapshotManager.lookup_official_domain` symmetrically normalizes hostnames, stripping ports, trailing dots, and `www.` prefixes.
+  3. `CircularsVerificationAdapter` evaluates affirmative prohibited practices (guaranteed returns, OTP demands, advance fee solicitations) prior to disclaimers. Disclaimers only yield `SUPPORTED` when no affirmative prohibited promises exist.
+  4. `SEBIVerificationAdapter` and `MCAVerificationAdapter` normalize whitespace and hyphens in registration numbers and CINs.
+  5. `ClaimVerificationEngine` contains adapter execution exceptions in `try...except`, logging degraded `source_unavailable` results while allowing surviving adapters to complete.
+  6. Rate-limited adapter attempts are recorded as explicit `rate_limited` adapter results rather than silently discarded.
+  7. In-memory `VerificationCache` and `RateLimiter` utilize `threading.Lock` for complete thread safety.
+  8. Evidence and Finding persistence in `ClaimVerificationEngine` executes inside atomic database transactions (`repository._db.transaction()`).
+- Why: Provides defense-in-depth against sophisticated evasion techniques and ensures enterprise-grade operational stability.
+- Alternatives considered: Single-URL parsing and blind disclaimer suppression (rejected: trivially bypassable by real-world fraudsters).
+- Consequences: Rock-solid verification engine with 26 comprehensive verification tests covering adversarial, resilience, and concurrency scenarios.
+- Files: `sangyan/verification/engine.py`, `sangyan/verification/snapshots.py`, `sangyan/verification/cache.py`, `sangyan/verification/adapters/`, `tests/test_verification.py`
+
+
 
 

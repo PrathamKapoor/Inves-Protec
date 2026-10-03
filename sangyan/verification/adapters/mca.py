@@ -38,12 +38,14 @@ class MCAVerificationAdapter(VerificationAdapter):
 
         # Extract CIN
         cin: Optional[str] = None
-        if entity and entity.registration_number and re.match(r"^[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$", entity.registration_number, re.I):
-            cin = entity.registration_number.upper()
-        else:
-            match = re.search(r"\b([LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6})\b", stmt, re.I)
-            if match:
-                cin = match.group(1).upper()
+        stmt_match = re.search(r"\b([LU][\s\-]?[0-9]{5}[\s\-]?[A-Z]{2}[\s\-]?[0-9]{4}[\s\-]?[A-Z]{3}[\s\-]?[0-9]{6})\b", stmt, re.I)
+        if stmt_match:
+            cin = re.sub(r"[\s\-]", "", stmt_match.group(1)).upper()
+        elif entity and entity.registration_number:
+            clean_reg = re.sub(r"[\s\-]", "", entity.registration_number).upper()
+            if re.match(r"^[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$", clean_reg):
+                cin = clean_reg
+
 
         if cin:
             record = self.snapshots.lookup_mca_cin(cin)

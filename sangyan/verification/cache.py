@@ -1,6 +1,7 @@
 """Verification caching and rate limiting with TTL freshness controls."""
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -25,11 +26,12 @@ class CacheEntry:
 
 
 class VerificationCache:
-    """In-memory TTL cache with cryptographic content hashing and freshness tracking."""
+    """In-memory thread-safe TTL cache with cryptographic content hashing and freshness tracking."""
 
     def __init__(self, default_ttl_sec: int = 3600) -> None:
         self.default_ttl_sec = default_ttl_sec
         self._entries: dict[str, CacheEntry] = {}
+        self._lock = threading.Lock()
 
     def make_key(self, source_id: str, identifier: str, version: str = "default") -> str:
         """Construct deterministic cache key."""
@@ -38,13 +40,14 @@ class VerificationCache:
 
     def get(self, key: str) -> Optional[Any]:
         """Retrieve entry if present and not expired."""
-        entry = self._entries.get(key)
-        if entry is None:
-            return None
-        if entry.is_expired:
-            del self._entries[key]
-            return None
-        return entry.data
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            if entry.is_expired:
+                del self._entries[key]
+                return None
+            return entry.data
 
     def set(
         self,
@@ -66,22 +69,26 @@ class VerificationCache:
             created_at=now,
             expires_at=now + ttl,
         )
-        self._entries[key] = entry
+        with self._lock:
+            self._entries[key] = entry
         return entry
 
     def invalidate(self, key: str) -> None:
-        self._entries.pop(key, None)
+        with self._lock:
+            self._entries.pop(key, None)
 
     def clear(self) -> None:
-        self._entries.clear()
+        with self._lock:
+            self._entries.clear()
 
 
 class RateLimiter:
-    """Sliding-window rate limiter per source to prevent upstream denial-of-service."""
+    """Thread-safe sliding-window rate limiter per source to prevent upstream denial-of-service."""
 
     def __init__(self, default_requests_per_sec: float = 5.0) -> None:
         self.default_rate = default_requests_per_sec
         self._history: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
 
     def allow_request(self, source_id: str, max_rate: Optional[float] = None) -> bool:
         """Check whether a request is allowed within rate limits."""
@@ -89,18 +96,20 @@ class RateLimiter:
         now = time.time()
         window_start = now - 1.0
 
-        history = self._history.setdefault(source_id, [])
-        # Prune calls older than 1 second
-        self._history[source_id] = [ts for ts in history if ts > window_start]
+        with self._lock:
+            history = self._history.setdefault(source_id, [])
+            # Prune calls older than 1 second
+            self._history[source_id] = [ts for ts in history if ts > window_start]
 
-        if len(self._history[source_id]) >= limit:
-            return False
+            if len(self._history[source_id]) >= limit:
+                return False
 
-        self._history[source_id].append(now)
-        return True
+            self._history[source_id].append(now)
+            return True
 
     @staticmethod
     def calculate_backoff(attempt: int, base_delay: float = 0.5, max_delay: float = 4.0) -> float:
         """Exponential backoff delay in seconds."""
         delay = base_delay * (2 ** max(attempt, 0))
         return min(delay, max_delay)
+

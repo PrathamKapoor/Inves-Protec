@@ -42,22 +42,15 @@ class CircularsVerificationAdapter(VerificationAdapter):
         stmt = claim.statement
         stmt_lower = stmt.lower()
 
-        # Hard negative check: Is this an advisory or educational disclaimer?
-        # e.g., "Investments are subject to market risks; past performance does not guarantee future results."
-        if "subject to market risks" in stmt_lower or "past performance is not" in stmt_lower or "not guaranteed" in stmt_lower:
-            return AdapterResult(
-                adapter_id=self.adapter_id,
-                source_id=self.source_id,
-                status="verified",
-                stance="SUPPORTED",
-                excerpt=stmt[:200],
-                rationale="Statement conforms to standard statutory risk disclosures mandated by SEBI regulations.",
-                confidence_score=0.98,
-                retrieved_at=now,
-            )
+        # Prohibited Practice 1: Guaranteed / Fixed / Assured returns (affirmative, not negated)
+        has_guarantee = bool(
+            re.search(r"\b(guarantee[ds]?|100%\s+guarantee|fixed\s+return|assured\s+return|zero\s+risk|loss[- ]proof|pakka\s+profit)\b", stmt_lower)
+        )
+        is_negated_guarantee = bool(
+            re.search(r"\b(?:not|never|no|nahi|nahin|na|mat|does\s+not)\s+(?:guarantee[ds]?|assure[ds]?|fixed)\b", stmt_lower)
+        )
 
-        # Prohibited Practice 1: Guaranteed / Fixed / Assured returns
-        if re.search(r"\b(guarantee[ds]?|100%\s+guarantee|fixed\s+return|assured\s+return|zero\s+risk|loss[- ]proof|pakka\s+profit)\b", stmt_lower):
+        if has_guarantee and not is_negated_guarantee:
             circular = self.snapshots.lookup_prohibited_practice("guaranteed return promise")
             circular_info = circular[0] if circular else {
                 "circular_no": "SEBI/HO/MIRSD/MIRSD-PoD-1/P/CIR/2023/24",
@@ -79,8 +72,15 @@ class CircularsVerificationAdapter(VerificationAdapter):
                 retrieved_at=now,
             )
 
-        # Prohibited Practice 2: Demanding OTP or private credentials
-        if re.search(r"\b(otp|share\s+password|demat\s+login|trading\s+pin|anydesk|teamviewer)\b", stmt_lower):
+        # Prohibited Practice 2: Demanding OTP or private credentials (affirmative, not negated)
+        has_otp = bool(
+            re.search(r"\b(otp|share\s+password|demat\s+login|trading\s+pin|anydesk|teamviewer)\b", stmt_lower)
+        )
+        is_negated_otp = bool(
+            re.search(r"\b(?:never|do\s+not|don't|nahi|nahin|na|mat)\s+(?:share|give|tell|provide)\s+(?:your\s+)?(?:otp|password|pin)\b", stmt_lower)
+        )
+
+        if has_otp and not is_negated_otp:
             circular = self.snapshots.lookup_prohibited_practice("otp sharing request")
             circular_info = circular[0] if circular else {
                 "circular_no": "SEBI/HO/ISD/ISD/CIR/P/2020/0001",
@@ -120,6 +120,27 @@ class CircularsVerificationAdapter(VerificationAdapter):
                     f"taxes via standard automated withholding and never require upfront deposits to release client funds."
                 ),
                 structured_fact=circular_info,
+                confidence_score=0.98,
+                retrieved_at=now,
+            )
+
+        # Legitimate Statutory Disclosures / Regulatory Advisories Check:
+        # e.g., "Investments are subject to market risks; past performance does not guarantee future results."
+        if (
+            "subject to market risks" in stmt_lower
+            or "past performance is not" in stmt_lower
+            or is_negated_guarantee
+            or is_negated_otp
+            or "regulatory warning" in stmt_lower
+            or "sebi warns" in stmt_lower
+        ):
+            return AdapterResult(
+                adapter_id=self.adapter_id,
+                source_id=self.source_id,
+                status="verified",
+                stance="SUPPORTED",
+                excerpt=stmt[:200],
+                rationale="Statement conforms to standard statutory risk disclosures mandated by SEBI regulations.",
                 confidence_score=0.98,
                 retrieved_at=now,
             )

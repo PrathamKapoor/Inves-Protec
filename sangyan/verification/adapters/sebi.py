@@ -54,14 +54,13 @@ class SEBIVerificationAdapter(VerificationAdapter):
                 retrieved_at=now,
             )
 
-        # 2. Extract candidate SEBI registration number from entity or statement
+        # 2. Extract candidate SEBI registration number from statement or entity
         reg_no: Optional[str] = None
-        if entity and entity.registration_number:
-            reg_no = entity.registration_number.upper()
-        else:
-            match = re.search(r"\b(IN[ZAHPM][0-9]{8,10})\b", stmt, re.IGNORECASE)
-            if match:
-                reg_no = match.group(1).upper()
+        stmt_match = re.search(r"\b(IN[ZAHPM][\s\-]?[0-9]{8,10})\b", stmt, re.IGNORECASE)
+        if stmt_match:
+            reg_no = re.sub(r"[\s\-]", "", stmt_match.group(1)).upper()
+        elif entity and entity.registration_number:
+            reg_no = re.sub(r"[\s\-]", "", entity.registration_number).upper()
 
         # 3. Lookup by registration number if available
         if reg_no:

@@ -406,13 +406,15 @@ class SnapshotManager:
     # -----------------------------------------------------------------------
 
     def lookup_sebi_registration(self, reg_no: str) -> Optional[dict[str, Any]]:
-        """Lookup SEBI registration by exact registration identifier (case-insensitive)."""
+        """Lookup SEBI registration by exact or normalized registration identifier (case-insensitive)."""
         snap = self.get_snapshot("src_sebi_intermediaries")
         if not snap:
             return None
-        target = reg_no.strip().upper()
+        import re
+        target = re.sub(r"[\s\-]", "", reg_no).upper()
         for rec in snap.records:
-            if rec.get("registration_number", "").upper() == target:
+            rec_reg = re.sub(r"[\s\-]", "", rec.get("registration_number", "")).upper()
+            if rec_reg == target:
                 return dict(rec)
         return None
 
@@ -430,31 +432,45 @@ class SnapshotManager:
         return None
 
     def lookup_mca_cin(self, cin: str) -> Optional[dict[str, Any]]:
-        """Lookup MCA Corporate Identity Number by exact CIN (case-insensitive)."""
+        """Lookup MCA Corporate Identity Number by exact or normalized CIN (case-insensitive)."""
         snap = self.get_snapshot("src_mca_registry")
         if not snap:
             return None
-        target = cin.strip().upper()
+        import re
+        target = re.sub(r"[\s\-]", "", cin).upper()
         for rec in snap.records:
-            if rec.get("cin", "").upper() == target:
+            rec_cin = re.sub(r"[\s\-]", "", rec.get("cin", "")).upper()
+            if rec_cin == target:
                 return dict(rec)
         return None
 
     def lookup_official_domain(self, domain_or_url: str) -> Optional[dict[str, Any]]:
-        """Lookup domain in official directory and phishing blacklist."""
+        """Lookup domain in official directory and phishing blacklist with www and dot normalization."""
         snap = self.get_snapshot("src_official_domains")
         if not snap:
             return None
         # Extract host if full URL passed
-        host = domain_or_url.lower().strip()
+        host = domain_or_url.lower().strip().rstrip(".")
         if "://" in host:
             from urllib.parse import urlparse
             try:
                 host = urlparse(host).hostname or host
             except Exception:
                 pass
+        elif "/" in host:
+            host = host.split("/")[0]
+
+        # Strip port if present
+        if ":" in host:
+            host = host.split(":")[0]
+
+        host = host.strip().rstrip(".")
+        host_no_www = host[4:] if host.startswith("www.") else host
+
         for rec in snap.records:
-            if rec.get("domain", "").lower() == host:
+            rec_domain = rec.get("domain", "").lower().strip().rstrip(".")
+            rec_no_www = rec_domain[4:] if rec_domain.startswith("www.") else rec_domain
+            if host == rec_domain or host_no_www == rec_no_www:
                 return dict(rec)
         return None
 

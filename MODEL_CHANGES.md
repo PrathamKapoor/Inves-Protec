@@ -139,3 +139,13 @@ Financial claim verification uses five mutually exclusive stances (`ClaimStatus`
 
 3. **Multi-Tenant Isolation**:
    All database writes for `Evidence`, `Finding`, and `TrustReceipt` enforce tenant scoping through `TenantRepository`. Queries across tenants are strictly rejected.
+
+4. **Multi-Domain Threat Precedence**:
+   When content contains multiple URLs or domains (e.g. an attacker prepending `https://sebi.gov.in` before a phishing URL `http://zerodha-profit.cc`), the domain adapter evaluates all candidates and gives malicious lookalike domains and suspicious TLDs strict precedence, emitting `CONTRADICTED`.
+
+5. **Disclaimer Evasion Defense**:
+   Prohibited practice evaluations (guaranteed returns, OTP demands, fee demands) take precedence over general statutory disclaimers. A scammer cannot bypass regulatory prohibition simply by appending "subject to market risks".
+
+6. **Fault-Resilient Adapter Isolation**:
+   Exceptions thrown during adapter execution are contained per adapter, logging `source_unavailable` or `error` outcomes without crashing the pipeline. In-memory caching and rate limiting are fully thread-safe.
+

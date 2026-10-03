@@ -17,6 +17,7 @@ ADAPTER_STATUSES = (
     "invalid_request",
     "not_supported",
     "insufficient_evidence",
+    "error",
 )
 
 

@@ -179,13 +179,15 @@ ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
 | Claim & Entity Extraction | Atomic claim decomposition and SEBI/CIN/UPI/Channel entity extraction | `sangyan/intelligence/claims.py`, `sangyan/intelligence/entities.py` | d395cfe | D-012 |
 | Safety Signals & Hard Negatives | 20+ signal detectors with disclaimer/warning contextual suppression | `sangyan/intelligence/signals.py`, `sangyan/intelligence/pipeline.py` | d395cfe | D-013 |
 | Phase 2 Test Suite | 27 new tests (ingest, language, claims, entities, signals, stress tests) bringing total to 64 tests | `tests/test_ingest.py`, `tests/test_intelligence.py` | d395cfe | D-010..D-013 |
-| Authoritative Source Registry | Seed registry of SEBI, MCA, Exchanges, Circulars, Domains with trust tiers | `sangyan/verification/sources.py` | Pending | D-014 |
-| Versioned Snapshots | SHA3-256 verified registry snapshots and SnapshotManager | `sangyan/verification/snapshots.py` | Pending | D-016 |
-| Verification Caching & Rate Limiting | In-memory SHA3-256 TTL caching and sliding-window rate limiting | `sangyan/verification/cache.py` | Pending | D-021 |
-| Verification Adapters | SEBI intermediary, MCA CIN, Circulars, and Official Domain adapters | `sangyan/verification/adapters/` | Pending | D-015, D-017 |
-| Post-Quantum Trust Binding | ML-DSA-65 digital signing of findings, claims, and evidence digests | `sangyan/verification/trust_binding.py` | Pending | D-020 |
-| Claim Verification Engine | Orchestration, conflict resolution, epistemic stances, and repository persistence | `sangyan/verification/engine.py` | Pending | D-018, D-019 |
-| Phase 3 Test Suite | 18 new verification tests (adapters, conflict resolution, PQC trust, cross-tenant isolation, adversarial evasion) bringing total to 82 tests | `tests/test_verification.py` | Pending | D-014..D-021 |
+| Authoritative Source Registry | Seed registry of SEBI, MCA, Exchanges, Circulars, Domains with trust tiers | `sangyan/verification/sources.py` | 3ecb832 | D-014 |
+| Versioned Snapshots | SHA3-256 verified registry snapshots and SnapshotManager | `sangyan/verification/snapshots.py` | 3ecb832 | D-016 |
+| Verification Caching & Rate Limiting | In-memory SHA3-256 TTL caching and sliding-window rate limiting | `sangyan/verification/cache.py` | 3ecb832 | D-021 |
+| Verification Adapters | SEBI intermediary, MCA CIN, Circulars, and Official Domain adapters | `sangyan/verification/adapters/` | 3ecb832 | D-015, D-017 |
+| Post-Quantum Trust Binding | ML-DSA-65 digital signing of findings, claims, and evidence digests | `sangyan/verification/trust_binding.py` | 3ecb832 | D-020 |
+| Claim Verification Engine | Orchestration, conflict resolution, epistemic stances, and repository persistence | `sangyan/verification/engine.py` | 3ecb832 | D-018, D-019 |
+| Phase 3 Verification Test Suite | 18 verification tests (adapters, conflict resolution, PQC trust, cross-tenant isolation, adversarial evasion) | `tests/test_verification.py` | 3ecb832 | D-014..D-021 |
+| Phase 3 Hardening & Evasion Defense | Multi-domain threat precedence, disclaimer evasion defense, adapter fault resilience, thread safety, and 8 new tests (total 90 tests) | `sangyan/verification/`, `tests/test_verification.py` | Pending | D-022 |
+
 
 
 
