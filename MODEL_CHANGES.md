@@ -105,13 +105,27 @@ Returned by `ClaimVerificationEngine.verify_claims()`:
 ```python
 @dataclass
 class VerificationOutcome:
-    claim: Claim
-    stance: ClaimStatus
+    claim_id: str
+    status: str  # SUPPORTED, CONTRADICTED, CONFLICTING, OUTDATED, INSUFFICIENT_EVIDENCE
+    finding: Finding
     evidence_items: list[Evidence] = field(default_factory=list)
-    finding: Optional[Finding] = None
+    sources: list[Source] = field(default_factory=list)
     trust_receipt_id: Optional[str] = None
-    trust_receipt: Optional[TrustReceipt] = None
+    adapter_results: list[AdapterResult] = field(default_factory=list)
 ```
+
+### 3.3 `InvestigationReport` (`sangyan.verification.engine`)
+Returned by `ClaimVerificationEngine.verify_content_item()`:
+```python
+@dataclass
+class InvestigationReport:
+    content_item: ContentItem
+    analysis: AnalysisResult
+    outcomes: list[VerificationOutcome]
+    investigation: Investigation
+    overall_status: str  # "SAFE", "HIGH_RISK", "SUSPICIOUS", "UNVERIFIED"
+```
+
 
 ---
 

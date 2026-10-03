@@ -471,4 +471,71 @@ class TestConflictResolutionAndTrust:
 
         assert len(errors) == 0
 
+    def test_end_to_end_verify_content_item_high_risk(self, repo_and_trust):
+        """Complete workflow: raw predatory content -> intelligence analysis -> authoritative verification -> post-quantum trust -> investigation persistence."""
+        repo, trust = repo_and_trust
+        trust_binding = TrustBindingService(trust)
+        engine = ClaimVerificationEngine(trust_binding=trust_binding)
+
+        raw = (
+            "Zerodha Broking Limited is SEBI registered under INZ000031633. "
+            "We offer 100% guaranteed monthly returns on your investment! "
+            "Transfer fees to personal UPI fastprofits@okhdfcbank."
+        )
+        item = ContentItem(
+            organization_id=repo.organization_id,
+            content_type="text",
+            raw_content=raw,
+            normalized_text=raw,
+        )
+        item_id = repo.save_content_item(item)
+        item.id = item_id
+
+        report = engine.verify_content_item(item, repository=repo)
+
+        assert report.overall_status == "HIGH_RISK"
+        assert len(report.analysis.claims) >= 2
+        assert len(report.analysis.signals) >= 1
+        assert report.investigation.id is not None
+        assert report.investigation.status == "COMPLETED"
+
+        # Check repository persistence
+        saved_inv = repo.get_investigation(report.investigation.id)
+        assert saved_inv.status == "COMPLETED"
+        assert len(saved_inv.claim_ids) == len(report.analysis.claims)
+        assert len(saved_inv.finding_ids) == len(report.outcomes)
+
+        # Check that individual findings and trust receipts were persisted
+        stances = [o.status for o in report.outcomes]
+        assert "SUPPORTED" in stances  # Zerodha INZ registration
+        assert "CONTRADICTED" in stances  # 100% guaranteed returns prohibited
+
+    def test_end_to_end_verify_content_item_safe(self, repo_and_trust):
+        """Complete workflow for safe educational/official content."""
+        repo, trust = repo_and_trust
+        trust_binding = TrustBindingService(trust)
+        engine = ClaimVerificationEngine(trust_binding=trust_binding)
+
+        raw = (
+            "Zerodha Broking Limited is an active stock broker registered with SEBI under INZ000031633. "
+            "Access official trading services at https://zerodha.com. "
+            "Mutual fund investments are subject to market risks, read all scheme related documents carefully."
+        )
+        item = ContentItem(
+            organization_id=repo.organization_id,
+            content_type="text",
+            raw_content=raw,
+            normalized_text=raw,
+        )
+        item_id = repo.save_content_item(item)
+        item.id = item_id
+
+        report = engine.verify_content_item(item, repository=repo)
+
+        assert report.overall_status == "SAFE"
+        assert report.analysis.risk_score < 0.2
+        assert report.investigation.status == "COMPLETED"
+        assert all(o.status == "SUPPORTED" for o in report.outcomes)
+
+
 

@@ -87,6 +87,7 @@ The repository has a working, tested, standalone foundation, complete Content In
 - D-020: ML-DSA-65 Post-Quantum Trust Binding for Verification Findings
 - D-021: Verification Caching & Upstream Rate Limiting
 - D-022: Multi-Domain Threat Precedence, Disclaimer Evasion Defense, and Engine Fault Resilience
+- D-023: End-to-End Investigation Orchestration & Regex Clause Splitting Preservation
 
 ## 6. Requirements and Constraints
 - Git authorship: strictly `PrathamKapoor <prathamkapoor027@gmail.com>`. No AI/model attribution.
@@ -97,7 +98,7 @@ The repository has a working, tested, standalone foundation, complete Content In
 - Do not commit paper/, research/, *.tex.
 
 ## 7. Testing and Verification
-- Full test suite: **90 passed in 9.62s**, 0 failures, exit code 0 (`C:\Projects\SIH26\TRUST-SAT\.venv313repro\Scripts\python.exe -m pytest tests -v`).
+- Full test suite: **92 passed in 7.62s**, 0 failures, exit code 0 (`C:\Projects\SIH26\TRUST-SAT\.venv313repro\Scripts\python.exe -m pytest tests -v`).
 - `tests/test_crypto.py`: 3 passed (canonical JSON key sorting, SHA3-256 digest, ML-DSA-65 keygen/sign/verify/tamper detection).
 - `tests/test_database.py`: 4 passed (connect, query, duplicate entry, transaction rollback, migration runner idempotency).
 - `tests/test_domain.py`: 22 passed (all 10 domain models, enums, confidence vectors, validation error reporting).
@@ -106,7 +107,7 @@ The repository has a working, tested, standalone foundation, complete Content In
 - `tests/test_persistence.py`: 4 passed (tenant isolation, permission enforcement, investigation & review lifecycle, full repository CRUD).
 - `tests/test_security.py`: 3 passed (unsafe IP detection, URL shape validation, loopback blocking).
 - `tests/test_trust.py`: 2 passed (keypair persistence, document signing and post-quantum verification).
-- `tests/test_verification.py`: 26 passed (registry lookups, snapshot integrity, snapshot tampering detection, verification caching, rate limiting, SEBI active/expired/cancelled/bogus lookups, MCA active/struck-off/bogus CIN lookups, regulatory circular prohibited returns and OTP demands, official domain authentication, phishing lookalike detection, suspicious TLD detection, multi-source conflict resolution, end-to-end ClaimVerificationEngine orchestration, ML-DSA-65 trust binding & tamper detection, cross-tenant isolation, adversarial brand spoofing override, phishing prepended with official domain override, guaranteed return disclaimer evasion defense, adapter exception containment, explicit rate limit recording, www and dot domain normalization, hyphenated/spaced registration numbers, precise entity matching without bleed, multithreaded caching and rate limiter concurrency).
+- `tests/test_verification.py`: 28 passed (registry lookups, snapshot integrity, snapshot tampering detection, verification caching, rate limiting, SEBI active/expired/cancelled/bogus lookups, MCA active/struck-off/bogus CIN lookups, regulatory circular prohibited returns and OTP demands, official domain authentication, phishing lookalike detection, suspicious TLD detection, multi-source conflict resolution, end-to-end ClaimVerificationEngine orchestration, ML-DSA-65 trust binding & tamper detection, cross-tenant isolation, adversarial brand spoofing override, phishing prepended with official domain override, guaranteed return disclaimer evasion defense, adapter exception containment, explicit rate limit recording, www and dot domain normalization, hyphenated/spaced registration numbers, precise entity matching without bleed, multithreaded caching and rate limiter concurrency, end-to-end verify_content_item for high-risk phishing content with post-quantum receipt verification, end-to-end verify_content_item for legitimate registered broker content).
 
 
 ## 8. Known Issues / Risks

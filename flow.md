@@ -152,8 +152,15 @@ ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
  │   ├─ builds canonical verification payload   finding_id, claim_id, stance, statement, evidence_hashes
  │   ├─ signs payload with ML-DSA-65            pure Python dilithium-py post-quantum digital signature
  │   └─ generates signed TrustReceipt           cryptographically anchors verification determination
- └─ 6. Scoped Atomic Persistence                sangyan/tenancy/repository.py
-     └─ stores Evidence, Findings, and Receipts inside tenant isolation boundary
+ ├─ 6. Scoped Atomic Persistence                sangyan/tenancy/repository.py
+ │   └─ stores Evidence, Findings, and Receipts inside tenant isolation boundary
+ └─ 7. End-to-End Investigation Orchestration   verify_content_item()
+     ├─ executes ContentIntelligenceEngine      atomic claims, entities, observable safety signals
+     ├─ persists analysis atomically            database transaction guarantees integrity
+     ├─ executes ClaimVerificationEngine        multi-adapter evaluation across all extracted claims
+     ├─ binds post-quantum TrustReceipts        all findings cryptographically sealed
+     ├─ synthesizes holistic posture            SAFE, HIGH_RISK, SUSPICIOUS, or UNVERIFIED
+     └─ returns InvestigationReport             comprehensive investigation bundle with Investigation record
 ```
 
 ---
@@ -187,6 +194,8 @@ ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
 | Claim Verification Engine | Orchestration, conflict resolution, epistemic stances, and repository persistence | `sangyan/verification/engine.py` | 3ecb832 | D-018, D-019 |
 | Phase 3 Verification Test Suite | 18 verification tests (adapters, conflict resolution, PQC trust, cross-tenant isolation, adversarial evasion) | `tests/test_verification.py` | 3ecb832 | D-014..D-021 |
 | Phase 3 Hardening & Evasion Defense | Multi-domain threat precedence, disclaimer evasion defense, adapter fault resilience, thread safety, and 8 new tests (total 90 tests) | `sangyan/verification/`, `tests/test_verification.py` | d60429c | D-022 |
+| End-to-End Investigation Orchestration | Lookbehind clause splitting regex, transactional persistence, verify_content_item(), InvestigationReport, and 2 E2E tests (total 92 tests) | `sangyan/intelligence/`, `sangyan/verification/`, `tests/test_verification.py` | Pending | D-023 |
+
 
 
 

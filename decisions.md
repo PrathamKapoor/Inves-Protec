@@ -325,6 +325,31 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Rock-solid verification engine with 26 comprehensive verification tests covering adversarial, resilience, and concurrency scenarios.
 - Files: `sangyan/verification/engine.py`, `sangyan/verification/snapshots.py`, `sangyan/verification/cache.py`, `sangyan/verification/adapters/`, `tests/test_verification.py`
 
+---
+
+### D-023: End-to-End Investigation Orchestration & Regex Clause Splitting Preservation
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Two systemic integration issues were identified during end-to-end verification pipeline testing:
+  1. Clause splitting regex `[\.\!\?।|;]\s*` was greedily matching dot characters in URLs (e.g. `https://zerodha.com` became split into `https://zerodha` and `com`), numeric floating points, and abbreviations because `\s*` matched zero whitespace immediately following a period.
+  2. While `ContentIntelligenceEngine` and `ClaimVerificationEngine` operated independently, there was no unified orchestration method to ingest raw content, extract intelligence, verify all extracted claims, synthesize post-quantum trust receipts, compute an overall risk posture, and persist an `Investigation` audit envelope.
+  3. `persist_analysis()` in `ContentIntelligenceEngine` did not execute inside a database transaction, posing atomicity hazards if entity persistence failed after claims were written.
+- Decision:
+  1. Updated `CLAUSE_SPLIT_REGEX` in `sangyan/intelligence/claims.py` to use positive lookbehind `(?<=[.!?।|;])\s+`. Sentence splits now require at least one whitespace character after punctuation, preserving embedded dots in URLs (`zerodha.com`), financial metrics (`10.5%`), and abbreviations.
+  2. Wrapped `persist_analysis()` in `sangyan/intelligence/pipeline.py` in `with repository._db.transaction():` to ensure atomicity.
+  3. Implemented `verify_content_item(content_item, repository, user_id)` and `InvestigationReport` in `ClaimVerificationEngine`:
+     - Analyzes content with `ContentIntelligenceEngine`.
+     - Atomically persists extracted claims, entities, and safety signals.
+     - Verifies all atomic claims using registered authoritative adapters.
+     - Binds ML-DSA-65 post-quantum trust receipts.
+     - Derives holistic `overall_status` (`HIGH_RISK` if prohibited/contradicted claims exist, `SUSPICIOUS` if unverified claims or signals exist, `SAFE` if supported without high-risk signals).
+     - Generates and persists the `Investigation` record linking all findings and evidence.
+  4. Added statutory disclosure keywords (`market risks`, `scheme related`, `disclaimer`, `regulatory warning`) to `CircularsVerificationAdapter` to correctly support legitimate risk disclosures.
+- Why: Bridges Phase 2 Content Intelligence and Phase 3 Authoritative Verification into a seamless, atomic, production-ready investigation workflow while eliminating URL corruption.
+- Alternatives considered: Separate manual invocation of intelligence and verification in user controllers (rejected: duplicates pipeline wiring and risks inconsistent persistence).
+- Consequences: Full end-to-end investigation pipeline executable via a single call, verified by 2 comprehensive end-to-end integration tests. Total test suite reaches 92 passed tests.
+- Files: `sangyan/intelligence/claims.py`, `sangyan/intelligence/pipeline.py`, `sangyan/verification/adapters/circulars.py`, `sangyan/verification/engine.py`, `tests/test_verification.py`
+
+
 
 
 

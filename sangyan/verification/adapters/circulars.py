@@ -27,10 +27,11 @@ class CircularsVerificationAdapter(VerificationAdapter):
         stmt = claim.statement.lower()
         return bool(
             re.search(
-                r"\b(guarantee|guaranteed|fixed\s+return|100%|risk[- ]free|loss\s+recovery|otp|password|withdrawal\s+fee|tax\s+to\s+withdraw)\b",
+                r"\b(guarantee|guaranteed|fixed\s+return|100%|risk[- ]free|loss\s+recovery|otp|password|withdrawal\s+fee|tax\s+to\s+withdraw|market\s+risks?|scheme\s+related|statutory|disclaimer|regulatory\s+warning|sebi\s+warns?)\b",
                 stmt,
             )
         )
+
 
     def verify(
         self,
@@ -133,8 +134,11 @@ class CircularsVerificationAdapter(VerificationAdapter):
             or is_negated_otp
             or "regulatory warning" in stmt_lower
             or "sebi warns" in stmt_lower
+            or "scheme related" in stmt_lower
+            or "disclaimer" in stmt_lower
         ):
             return AdapterResult(
+
                 adapter_id=self.adapter_id,
                 source_id=self.source_id,
                 status="verified",

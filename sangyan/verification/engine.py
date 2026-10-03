@@ -15,8 +15,10 @@ from sangyan.domain.models import (
     Entity,
     Evidence,
     Finding,
+    Investigation,
     Source,
 )
+from sangyan.intelligence.pipeline import AnalysisResult, ContentIntelligenceEngine
 from sangyan.tenancy.repository import TenantRepository
 from sangyan.verification.adapters.base import AdapterResult, VerificationAdapter
 from sangyan.verification.adapters.circulars import CircularsVerificationAdapter
@@ -51,6 +53,28 @@ class VerificationOutcome:
             "sources": [s.to_dict() for s in self.sources],
             "trust_receipt_id": self.trust_receipt_id,
         }
+
+
+@dataclass
+class InvestigationReport:
+    """Comprehensive investigation report combining content intelligence, claim verification, and trust receipts."""
+
+    content_item: ContentItem
+    analysis: AnalysisResult
+    outcomes: list[VerificationOutcome]
+    investigation: Investigation
+    overall_status: str  # "SAFE", "HIGH_RISK", "SUSPICIOUS", "UNVERIFIED"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "investigation_id": self.investigation.id,
+            "content_item_id": self.content_item.id,
+            "overall_status": self.overall_status,
+            "analysis": self.analysis.to_dict(),
+            "outcomes": [o.to_dict() for o in self.outcomes],
+            "investigation": self.investigation.to_dict(),
+        }
+
 
 
 class ClaimVerificationEngine:
@@ -227,6 +251,63 @@ class ClaimVerificationEngine:
     ) -> list[VerificationOutcome]:
         """Verify all decomposed claims in an investigation batch."""
         return [self.verify_claim(claim, entities, repository) for claim in claims]
+
+    def verify_content_item(
+        self,
+        content_item: ContentItem,
+        repository: Optional[TenantRepository] = None,
+        user_id: Optional[str] = None,
+    ) -> InvestigationReport:
+        """Execute end-to-end investigation pipeline on raw or ingested content."""
+        intel_engine = ContentIntelligenceEngine()
+        analysis = intel_engine.analyze(content_item)
+
+        if repository:
+            intel_engine.persist_analysis(analysis, repository)
+
+        outcomes = self.verify_all_claims(analysis.claims, analysis.entities, repository)
+
+        # Aggregate overall status
+        stances = [o.status for o in outcomes]
+        if "CONTRADICTED" in stances or analysis.risk_score >= 0.75:
+            overall_status = "HIGH_RISK"
+        elif "CONFLICTING" in stances or "OUTDATED" in stances or analysis.risk_score >= 0.40:
+            overall_status = "SUSPICIOUS"
+        elif all(s == "SUPPORTED" for s in stances) and len(stances) > 0 and analysis.risk_score < 0.2:
+            overall_status = "SAFE"
+        else:
+            overall_status = "UNVERIFIED"
+
+        finding_ids = [o.finding.id for o in outcomes]
+        first_receipt = next((o.trust_receipt_id for o in outcomes if o.trust_receipt_id), None)
+
+        effective_user_id = user_id or (repository.user_id if repository else "system")
+        inv = Investigation(
+            organization_id=content_item.organization_id,
+            user_id=effective_user_id,
+            content_item_id=content_item.id,
+            claim_ids=[c.id for c in analysis.claims],
+            entity_ids=[e.id for e in analysis.entities],
+            signal_ids=[s.id for s in analysis.signals],
+            finding_ids=finding_ids,
+            status="COMPLETED",
+            summary=f"Investigation completed: {overall_status} (verified {len(outcomes)} claims, detected {len(analysis.signals)} signals).",
+            completed_at=time.time(),
+            trust_receipt_id=first_receipt,
+            metadata={"overall_status": overall_status, "risk_score": analysis.risk_score},
+        )
+
+        if repository:
+            repository.save_investigation(inv)
+
+        return InvestigationReport(
+            content_item=content_item,
+            analysis=analysis,
+            outcomes=outcomes,
+            investigation=inv,
+            overall_status=overall_status,
+        )
+
 
     def _resolve_stances(
         self, results: list[AdapterResult]

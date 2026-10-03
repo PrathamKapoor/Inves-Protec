@@ -38,8 +38,9 @@ AFFILIATION_PATTERNS = re.compile(
 
 # Conjunctions and clause boundaries for splitting compound assertions
 CLAUSE_SPLIT_REGEX = re.compile(
-    r"(?:[\r\n]+|[\.\!\?।|;]\s*|\b(?:and also|and\b|aur\b|ani\b|tatha\b|evam\b|lekin\b|par\b|pan\b|but\b|however\b)\s+)"
+    r"(?:[\r\n]+|(?<=[.!?।|;])\s+|\b(?:and also|and\b|aur\b|ani\b|tatha\b|evam\b|lekin\b|par\b|pan\b|but\b|however\b)\s+)"
 )
+
 
 
 class ClaimExtractor:
