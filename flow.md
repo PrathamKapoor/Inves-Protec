@@ -194,7 +194,7 @@ ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
 | Claim Verification Engine | Orchestration, conflict resolution, epistemic stances, and repository persistence | `sangyan/verification/engine.py` | 3ecb832 | D-018, D-019 |
 | Phase 3 Verification Test Suite | 18 verification tests (adapters, conflict resolution, PQC trust, cross-tenant isolation, adversarial evasion) | `tests/test_verification.py` | 3ecb832 | D-014..D-021 |
 | Phase 3 Hardening & Evasion Defense | Multi-domain threat precedence, disclaimer evasion defense, adapter fault resilience, thread safety, and 8 new tests (total 90 tests) | `sangyan/verification/`, `tests/test_verification.py` | d60429c | D-022 |
-| End-to-End Investigation Orchestration | Lookbehind clause splitting regex, transactional persistence, verify_content_item(), InvestigationReport, and 2 E2E tests (total 92 tests) | `sangyan/intelligence/`, `sangyan/verification/`, `tests/test_verification.py` | Pending | D-023 |
+| End-to-End Investigation Orchestration | Lookbehind clause splitting regex, transactional persistence, verify_content_item(), InvestigationReport, and 2 E2E tests (total 92 tests) | `sangyan/intelligence/`, `sangyan/verification/`, `tests/test_verification.py` | 8754f62 | D-023 |
 
 
 
