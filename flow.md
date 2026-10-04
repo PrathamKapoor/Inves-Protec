@@ -623,15 +623,15 @@ Multi-Replica Kubernetes Ingress / Cluster Traffic
 | Cryptographic Backup & Safe Restore | Online VACUUM snapshot, AES-256-GCM + PBKDF2 encryption, SHA-256 manifest, traversal-safe restore | `sangyan/database/backup.py`, `sangyan/cli.py` | a7b6504 | D-057 |
 | Production Kubernetes & Helm Deployment | Helm chart with non-root securityContext, Ingress TLS, NetworkPolicy, Job, and CronJob | `deploy/helm/sangyan/` | a7b6504 | D-058 |
 | Phase 7 Verification Suite | 28 new tests covering config, health, backups, migrations, container and k8s manifests (total 205 tests) | `tests/test_*.py` | a7b6504 | D-051..D-058 |
-| Distributed Relational Engine | PostgreSQL connection pooling with psycopg_pool, thread-local transactions, and rowcount reporting | `sangyan/database/postgres.py`, `sangyan/database/engine.py` | pending | D-059 |
-| Durable Workflow Checkpointing | PostgresSaver checkpointer with pooled connections, schema initialization, and tenant thread isolation | `sangyan/workflow/checkpointer.py` | pending | D-060 |
-| Distributed Rate Limiting | Atomic Redis token bucket via Lua script and shared sliding-window failed-auth lockout across pods | `sangyan/security/redis_limiter.py`, `sangyan/security/middleware.py` | pending | D-061 |
-| Review Race Concurrency | Database-level atomic conditional transition (AWAITING_REVIEW -> FINALIZING) preventing double-finalization | `sangyan/tenancy/repository.py`, `sangyan/workflow/service.py` | pending | D-062 |
-| Chained Audit Serialization | PostgreSQL advisory transaction locking (pg_advisory_xact_lock) for unbroken cryptographic hash chains | `sangyan/tenancy/repository.py` | pending | D-063 |
-| Cloud Backup Replication | S3/GCS-compatible offsite replication with strict pre-upload encryption enforcement (.enc) and isolated restore | `sangyan/database/cloud_backup.py`, `sangyan/cli.py` | pending | D-064 |
-| OpenTelemetry Distributed Tracing | W3C trace propagation with privacy boundary rejecting raw claims, tokens, and PII from span attributes | `sangyan/security/tracing.py`, `sangyan/api/app.py` | pending | D-065 |
-| Distributed Topology & Scaling | Multi-replica Helm values, HPA, NetworkPolicy with Redis egress, and distributed docker-compose | `deploy/helm/sangyan/`, `docker-compose.distributed.yml` | pending | D-066 |
-| Phase 8 Distributed Test Suite | 34 comprehensive tests across 15 scenarios covering concurrency, cloud backup, tracing, Redis, and Postgres (total 239 tests) | `tests/test_*.py` | pending | D-059..D-066 |
+| Distributed Relational Engine | PostgreSQL connection pooling with psycopg_pool, thread-local transactions, and rowcount reporting | `sangyan/database/postgres.py`, `sangyan/database/engine.py` | e6aaea5 | D-059 |
+| Durable Workflow Checkpointing | PostgresSaver checkpointer with pooled connections, schema initialization, and tenant thread isolation | `sangyan/workflow/checkpointer.py` | e6aaea5 | D-060 |
+| Distributed Rate Limiting | Atomic Redis token bucket via Lua script and shared sliding-window failed-auth lockout across pods | `sangyan/security/redis_limiter.py`, `sangyan/security/middleware.py` | e6aaea5 | D-061 |
+| Review Race Concurrency | Database-level atomic conditional transition (AWAITING_REVIEW -> FINALIZING) preventing double-finalization | `sangyan/tenancy/repository.py`, `sangyan/workflow/service.py` | e6aaea5 | D-062 |
+| Chained Audit Serialization | PostgreSQL advisory transaction locking (pg_advisory_xact_lock) for unbroken cryptographic hash chains | `sangyan/tenancy/repository.py` | e6aaea5 | D-063 |
+| Cloud Backup Replication | S3/GCS-compatible offsite replication with strict pre-upload encryption enforcement (.enc) and isolated restore | `sangyan/database/cloud_backup.py`, `sangyan/cli.py` | e6aaea5 | D-064 |
+| OpenTelemetry Distributed Tracing | W3C trace propagation with privacy boundary rejecting raw claims, tokens, and PII from span attributes | `sangyan/security/tracing.py`, `sangyan/api/app.py` | e6aaea5 | D-065 |
+| Distributed Topology & Scaling | Multi-replica Helm values, HPA, NetworkPolicy with Redis egress, and distributed docker-compose | `deploy/helm/sangyan/`, `docker-compose.distributed.yml` | e6aaea5 | D-066 |
+| Phase 8 Distributed Test Suite | 34 comprehensive tests across 15 scenarios covering concurrency, cloud backup, tracing, Redis, and Postgres (total 239 tests) | `tests/test_*.py` | e6aaea5 | D-059..D-066 |
 
 
 
