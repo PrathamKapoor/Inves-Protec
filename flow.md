@@ -731,17 +731,17 @@ Client Submission (POST /workflow/start?async_exec=true)
 | OpenTelemetry Distributed Tracing | W3C trace propagation with privacy boundary rejecting raw claims, tokens, and PII from span attributes | `sangyan/security/tracing.py`, `sangyan/api/app.py` | e6aaea5 | D-065 |
 | Distributed Topology & Scaling | Multi-replica Helm values, HPA, NetworkPolicy with Redis egress, and distributed docker-compose | `deploy/helm/sangyan/`, `docker-compose.distributed.yml` | e6aaea5 | D-066 |
 | Phase 8 Distributed Test Suite | 34 comprehensive tests across 15 scenarios covering concurrency, cloud backup, tracing, Redis, and Postgres (total 239 tests) | `tests/test_*.py` | e6aaea5 | D-059..D-066 |
-| Migration 005 Schema | Add sangyan_async_tasks relational outbox and sangyan_region_fencing multi-region split-brain tables | `sangyan/database/migrations.py` | [pending] | D-067, D-071 |
-| Asynchronous Task Domain & State Machine | Implement AsyncTask, TaskStatus, TaskType, VALID_TASK_TRANSITIONS, and decorrelated jitter backoff | `sangyan/async_exec/models.py` | [pending] | D-067 |
-| Outbox Repository & Relational Leasing | Implement AsyncTaskRepository with atomic leasing, lease renewals, retries, and dead-lettering | `sangyan/async_exec/repository.py` | [pending] | D-067 |
-| Redis Streams & Consumer Groups | Implement TaskQueue ABC, RedisStreamTaskQueue (XADD, XREADGROUP, XACK, XCLAIM), and InMemoryTaskQueue | `sangyan/async_exec/queue.py` | [pending] | D-067 |
-| Asynchronous Investigation Worker | Implement AsyncInvestigationWorker with bounded leasing, lease heartbeat, expired lease recovery, and SIGTERM shutdown | `sangyan/async_exec/worker.py` | [pending] | D-067, D-068 |
-| HITL Decoupling Semantic | Stage pause at review_gate_node marks task stage complete and releases capacity; resume via WORKFLOW_RESUME | `sangyan/async_exec/worker.py` | [pending] | D-068 |
-| Active-Passive DR & Split-Brain Fencing | DisasterRecoveryManager with epoch progression, write authority fencing, and StaleRegionError enforcement | `sangyan/dr/manager.py`, `sangyan/dr/models.py` | [pending] | D-071, D-072 |
-| Cryptographic Audit Continuity | SHA3-256 linear hash chain verification across failover boundaries and tamper detection | `sangyan/dr/manager.py` | [pending] | D-073 |
-| Pre-Write Authority Assertion | TenantRepository asserts region write authority on all write mutations; rejects writes if fenced or stale | `sangyan/tenancy/repository.py` | [pending] | D-071 |
-| Phase 9 CLI & REST Endpoints | Add worker, dr status/promote/simulate, task list/inspect/dead-letter/retry commands and REST routes | `sangyan/cli.py`, `sangyan/api/routes.py`, `sangyan/api/app.py` | [pending] | D-069, D-072 |
-| Phase 9 Comprehensive Test Suite | 36 new tests covering models, queues, worker, DR failover, API, and failure scenarios A-G (total 275 tests) | `tests/test_async_*.py`, `tests/test_dr_failover.py`, `tests/test_phase9_failure_scenarios.py` | [pending] | D-067..D-073 |
+| Migration 005 Schema | Add sangyan_async_tasks relational outbox and sangyan_region_fencing multi-region split-brain tables | `sangyan/database/migrations.py` | 5d014e4 | D-067, D-071 |
+| Asynchronous Task Domain & State Machine | Implement AsyncTask, TaskStatus, TaskType, VALID_TASK_TRANSITIONS, and decorrelated jitter backoff | `sangyan/async_exec/models.py` | 5d014e4 | D-067 |
+| Outbox Repository & Relational Leasing | Implement AsyncTaskRepository with atomic leasing, lease renewals, retries, and dead-lettering | `sangyan/async_exec/repository.py` | 5d014e4 | D-067 |
+| Redis Streams & Consumer Groups | Implement TaskQueue ABC, RedisStreamTaskQueue (XADD, XREADGROUP, XACK, XCLAIM), and InMemoryTaskQueue | `sangyan/async_exec/queue.py` | 5d014e4 | D-067 |
+| Asynchronous Investigation Worker | Implement AsyncInvestigationWorker with bounded leasing, lease heartbeat, expired lease recovery, and SIGTERM shutdown | `sangyan/async_exec/worker.py` | 5d014e4 | D-067, D-068 |
+| HITL Decoupling Semantic | Stage pause at review_gate_node marks task stage complete and releases capacity; resume via WORKFLOW_RESUME | `sangyan/async_exec/worker.py` | 5d014e4 | D-068 |
+| Active-Passive DR & Split-Brain Fencing | DisasterRecoveryManager with epoch progression, write authority fencing, and StaleRegionError enforcement | `sangyan/dr/manager.py`, `sangyan/dr/models.py` | 5d014e4 | D-071, D-072 |
+| Cryptographic Audit Continuity | SHA3-256 linear hash chain verification across failover boundaries and tamper detection | `sangyan/dr/manager.py` | 5d014e4 | D-073 |
+| Pre-Write Authority Assertion | TenantRepository asserts region write authority on all write mutations; rejects writes if fenced or stale | `sangyan/tenancy/repository.py` | 5d014e4 | D-071 |
+| Phase 9 CLI & REST Endpoints | Add worker, dr status/promote/simulate, task list/inspect/dead-letter/retry commands and REST routes | `sangyan/cli.py`, `sangyan/api/routes.py`, `sangyan/api/app.py` | 5d014e4 | D-069, D-072 |
+| Phase 9 Comprehensive Test Suite | 36 new tests covering models, queues, worker, DR failover, API, and failure scenarios A-G (total 275 tests) | `tests/test_async_*.py`, `tests/test_dr_failover.py`, `tests/test_phase9_failure_scenarios.py` | 5d014e4 | D-067..D-073 |
 
 
 
