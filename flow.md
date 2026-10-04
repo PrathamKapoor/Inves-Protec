@@ -159,8 +159,54 @@ ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
      ├─ persists analysis atomically            database transaction guarantees integrity
      ├─ executes ClaimVerificationEngine        multi-adapter evaluation across all extracted claims
      ├─ binds post-quantum TrustReceipts        all findings cryptographically sealed
-     ├─ synthesizes holistic posture            SAFE, HIGH_RISK, SUSPICIOUS, or UNVERIFIED
-     └─ returns InvestigationReport             comprehensive investigation bundle with Investigation record
+      ├─ synthesizes holistic posture            SAFE, HIGH_RISK, SUSPICIOUS, or UNVERIFIED
+      └─ returns InvestigationReport             comprehensive investigation bundle with Investigation record
+```
+
+---
+
+## 8. Investigation Correlation, Scam-Chain Reconstruction & Safe Guidance Execution Flow
+
+```text
+InvestigationOrchestrator.investigate(...)      sangyan/correlation/orchestrator.py
+ ├─ 1. Content Verification Execution           sangyan/verification/engine.py
+ │   ├─ verifies multiple content items (text/URLs) in tenant scope
+ │   ├─ extracts claims, entities, observable safety signals per item
+ │   └─ evaluates authoritative adapters (SEBI, MCA, Exchanges, Circulars, Domains, Payment)
+ ├─ 2. Multi-Content & Cross-Entity Correlation sangyan/correlation/correlator.py
+ │   ├─ canonical normalizers: phone (E.164-like), UPI VPA, domain FQDN, registration
+ │   ├─ evaluates relationship types: SHARED_ENTITY, SHARED_PAYMENT, SHARED_CONTACT, etc.
+ │   ├─ assigns relationship strength: STRONG, MEDIUM, WEAK based on deterministic criteria
+ │   ├─ bounded graph exploration: max 5 hops, max 200 edges, max 25 content items
+ │   └─ cycle avoidance: visited vertex tracking prevents infinite loops
+ ├─ 3. Scam-Chain Reconstruction                sangyan/correlation/scam_chains.py
+ │   ├─ reconstructs 12 stages: LURE_FIRST_CONTACT -> PLATFORM_ACCESS -> ... -> FEE_EXTORTION -> RECOVERY
+ │   ├─ assigns status: OBSERVED, SUPPORTED, INFERRED, NOT_OBSERVED, UNKNOWN
+ │   ├─ inferred progression: withdrawal blockage/fee implies prior deposit & fictitious returns
+ │   └─ hard-negative suppression: regulatory warning/caution texts evaluate all stages to NOT_OBSERVED
+ ├─ 4. Controlled 14-Pattern Scam Taxonomy      sangyan/correlation/taxonomy.py
+ │   ├─ multi-label pattern assignment: UNAUTHORIZED_ADVISORY, REGULATOR_IMPERSONATION, etc.
+ │   ├─ requires observable signal + entity type / registry contradiction combinations
+ │   └─ zero bare-keyword triggers; returns empty list if evidence threshold unmet
+ ├─ 5. Safe Next-Step Guidance & Preservation   sangyan/correlation/guidance.py
+ │   ├─ strictly non-investment advice: security, legal, and operational actions only
+ │   ├─ urgent freeze: cybercrime 1930 / banking golden-hour alert for financial loss
+ │   ├─ device & account hygiene: credential reset, 2FA, remote desktop software revocation
+ │   └─ forensic preservation checklist: raw chat logs, UTR/VPA transaction receipts, APKs
+ ├─ 6. Grievance Classification & Routing       sangyan/correlation/grievance.py
+ │   ├─ 9-category problem classification: UNREGISTERED_INTERMEDIARY, INVESTOR_FRAUD, etc.
+ │   ├─ official institutional routing: Cybercrime 1930, SEBI SCORES 2.0, RBI CMS, DoT Chakshu
+ │   └─ user-facing filing checklist with zero automated external submissions
+ ├─ 7. Epistemic Explainability & Abstention     sangyan/correlation/explainer.py
+ │   ├─ "Why was this flagged?": concise factual points tied directly to evidence IDs
+ │   └─ "What we don't know": explicit uncertainty statements on unverified claims & entities
+ ├─ 8. Post-Quantum Investigation Trust Binding sangyan/verification/trust_binding.py
+ │   ├─ canonical investigation payload: hashes, correlations, taxonomy, stages, guidance
+ │   ├─ signs payload using NIST FIPS 204 ML-DSA-65 post-quantum digital signature
+ │   └─ anchors complete investigation dossier with signed TrustReceipt
+ ├─ 9. Scoped Atomic Persistence                sangyan/tenancy/repository.py
+ │   └─ persists correlations, chain stages, grievances, and receipts in tenant transaction
+ └─ 10. Returns CorrelatedInvestigationReport
 ```
 
 ---
@@ -189,7 +235,7 @@ ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
 | Authoritative Source Registry | Seed registry of SEBI, MCA, Exchanges, Circulars, Domains with trust tiers | `sangyan/verification/sources.py` | 3ecb832 | D-014 |
 | Versioned Snapshots | SHA3-256 verified registry snapshots and SnapshotManager | `sangyan/verification/snapshots.py` | 3ecb832 | D-016 |
 | Verification Caching & Rate Limiting | In-memory SHA3-256 TTL caching and sliding-window rate limiting | `sangyan/verification/cache.py` | 3ecb832 | D-021 |
-| Verification Adapters | SEBI intermediary, MCA CIN, Circulars, and Official Domain adapters | `sangyan/verification/adapters/` | 3ecb832 | D-015, D-017 |
+| Verification Adapters | SEBI intermediary, MCA CIN, Circulars, and Official Domains adapters | `sangyan/verification/adapters/` | 3ecb832 | D-015, D-017 |
 | Post-Quantum Trust Binding | ML-DSA-65 digital signing of findings, claims, and evidence digests | `sangyan/verification/trust_binding.py` | 3ecb832 | D-020 |
 | Claim Verification Engine | Orchestration, conflict resolution, epistemic stances, and repository persistence | `sangyan/verification/engine.py` | 3ecb832 | D-018, D-019 |
 | Phase 3 Verification Test Suite | 18 verification tests (adapters, conflict resolution, PQC trust, cross-tenant isolation, adversarial evasion) | `tests/test_verification.py` | 3ecb832 | D-014..D-021 |
@@ -202,6 +248,16 @@ ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
 | Verification REST API & Routes | FastAPI endpoints for claims, content verification, investigations, sources, and audit logs | `sangyan/api/routes.py`, `sangyan/api/app.py` | a0766f5 | D-028 |
 | Human Inspection HTML Views | Server-rendered audit views with side-by-side conflicting evidence and Section 40 banner | `sangyan/api/views.py` | a0766f5 | D-029 |
 | Extended Verification & API Tests | 18 new unit and integration tests bringing suite to 110 passed | `tests/test_verification_extended.py`, `tests/test_api.py` | a0766f5 | D-024..D-029 |
+| Correlation Engine & Graph Correlator | Bounded multi-content entity/claim/signal graph with STRONG/MEDIUM/WEAK hierarchy and cycle avoidance | `sangyan/correlation/correlator.py`, `sangyan/domain/models.py` | pending | D-030 |
+| 12-Stage Scam-Chain Reconstruction | Lifecycle reconstruction with OBSERVED/INFERRED semantics and regulatory hard-negative suppression | `sangyan/correlation/scam_chains.py`, `sangyan/domain/models.py` | pending | D-031 |
+| Controlled Scam Taxonomy | Multi-label 14-pattern scam classifier requiring signal and contradiction combinations | `sangyan/correlation/taxonomy.py`, `sangyan/domain/models.py` | pending | D-032 |
+| Safe Guidance & Incident Preservation | Non-investment conditional action guidance and forensic incident preservation checklist | `sangyan/correlation/guidance.py`, `sangyan/domain/models.py` | pending | D-033 |
+| Grievance Classification & Routing | 9-category problem classification and institutional routing to SCORES, Cybercrime 1930, RBI CMS, Chakshu | `sangyan/correlation/grievance.py`, `sangyan/domain/models.py` | pending | D-034 |
+| Epistemic Explainability & Abstention | "Why was this flagged?" with evidence links and mandatory "What we don't know" explicit uncertainty | `sangyan/correlation/explainer.py`, `sangyan/domain/models.py` | pending | D-035 |
+| Investigation Post-Quantum Trust Binding | NIST ML-DSA-65 digital signing of canonical multi-content investigation dossiers | `sangyan/verification/trust_binding.py`, `sangyan/correlation/orchestrator.py` | pending | D-036 |
+| Phase 4 REST API & Migration 002 | Batch investigation API endpoints and Migration 002 tables (correlations, stages, grievances) | `sangyan/api/`, `sangyan/database/migrations.py` | pending | D-030..D-036 |
+| Phase 4 Test Suite | 21 new tests covering correlation, scam chains, guidance, grievance, explainability, PQC signing, API (total 131 tests) | `tests/test_correlation.py`, `tests/test_api.py` | pending | D-030..D-036 |
+
 
 
 

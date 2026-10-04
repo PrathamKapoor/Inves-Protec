@@ -269,9 +269,72 @@ MIGRATION_001_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_sangyan_audit_time ON sangyan_audit_events(timestamp)",
 )
 
+MIGRATION_002_STATEMENTS: tuple[str, ...] = (
+    # Investigation Correlations & Relationships
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_correlations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        relationship_type TEXT NOT NULL,
+        strength TEXT NOT NULL,
+        rationale TEXT NOT NULL,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_corr_org ON sangyan_correlations(organization_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_corr_inv ON sangyan_correlations(investigation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_corr_src ON sangyan_correlations(source_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_corr_tgt ON sangyan_correlations(target_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_corr_type ON sangyan_correlations(relationship_type)",
+    # Scam Chain Stages
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_scam_chain_stages (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        stage TEXT NOT NULL,
+        status TEXT NOT NULL,
+        evidence_refs TEXT NOT NULL DEFAULT '[]',
+        signal_refs TEXT NOT NULL DEFAULT '[]',
+        details TEXT NOT NULL DEFAULT '',
+        sequence_order INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_sc_org ON sangyan_scam_chain_stages(organization_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_sc_inv ON sangyan_scam_chain_stages(investigation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_sc_stage ON sangyan_scam_chain_stages(stage)",
+    # Grievance Records
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_grievance_records (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        routing_channel TEXT NOT NULL,
+        portal_url TEXT,
+        helpline TEXT,
+        guidance_steps TEXT NOT NULL DEFAULT '[]',
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_grv_org ON sangyan_grievance_records(organization_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_grv_inv ON sangyan_grievance_records(investigation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_grv_cat ON sangyan_grievance_records(category)",
+)
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_sangyan_core_tables", MIGRATION_001_STATEMENTS),
+    Migration(2, "create_sangyan_correlation_and_guidance_tables", MIGRATION_002_STATEMENTS),
 )
+
 
 
 class MigrationRunner:

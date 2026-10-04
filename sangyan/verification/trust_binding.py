@@ -67,3 +67,74 @@ class TrustBindingService:
         """Verify that the recorded receipt matches the finding and evidence without tampering."""
         payload = self.build_verification_payload(finding, claim, evidence_items)
         return self.trust_service.verify_document(receipt, payload)
+
+    def build_investigation_payload(
+        self,
+        investigation_id: str,
+        overall_status: str,
+        finding_ids: list[str],
+        evidence_hashes: list[str],
+        scam_patterns: list[str],
+        organization_id: str,
+        completed_at: float,
+    ) -> dict[str, Any]:
+        """Construct deterministic canonical document representing finalized investigation state."""
+        return {
+            "investigation_id": investigation_id,
+            "organization_id": organization_id,
+            "overall_status": overall_status,
+            "finding_ids": sorted(finding_ids),
+            "evidence_hashes": sorted(evidence_hashes),
+            "scam_patterns": sorted(scam_patterns),
+            "completed_at": completed_at,
+        }
+
+    def bind_investigation(
+        self,
+        investigation_id: str,
+        overall_status: str,
+        finding_ids: list[str],
+        evidence_hashes: list[str],
+        scam_patterns: list[str],
+        organization_id: str,
+        completed_at: float,
+    ) -> TrustReceipt:
+        """Sign canonical investigation payload with ML-DSA-65 post-quantum signature."""
+        payload = self.build_investigation_payload(
+            investigation_id=investigation_id,
+            overall_status=overall_status,
+            finding_ids=finding_ids,
+            evidence_hashes=evidence_hashes,
+            scam_patterns=scam_patterns,
+            organization_id=organization_id,
+            completed_at=completed_at,
+        )
+        return self.trust_service.sign_document(
+            subject_type="investigation",
+            subject_id=investigation_id,
+            document=payload,
+        )
+
+    def verify_investigation_integrity(
+        self,
+        receipt: TrustReceipt,
+        investigation_id: str,
+        overall_status: str,
+        finding_ids: list[str],
+        evidence_hashes: list[str],
+        scam_patterns: list[str],
+        organization_id: str,
+        completed_at: float,
+    ) -> bool:
+        """Verify post-quantum cryptographic proof for finalized investigation."""
+        payload = self.build_investigation_payload(
+            investigation_id=investigation_id,
+            overall_status=overall_status,
+            finding_ids=finding_ids,
+            evidence_hashes=evidence_hashes,
+            scam_patterns=scam_patterns,
+            organization_id=organization_id,
+            completed_at=completed_at,
+        )
+        return self.trust_service.verify_document(receipt, payload)
+

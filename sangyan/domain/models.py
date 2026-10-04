@@ -88,6 +88,79 @@ GUIDANCE_CATEGORIES = (
     "CYBERCRIME_1930",
     "CREDENTIAL_SAFETY",
     "INVESTOR_AWARENESS",
+    "WITHDRAWAL_SAFETY",
+    "BANKING_PAYMENT_SAFETY",
+    "CHAKSHU_REPORTING",
+)
+
+RELATIONSHIP_TYPES = (
+    "SAME_ENTITY",
+    "SAME_UPI",
+    "SAME_PHONE",
+    "SAME_DOMAIN",
+    "SAME_URL",
+    "SAME_REGISTRATION",
+    "SAME_APP",
+    "SHARED_INFRASTRUCTURE",
+    "CLAIM_DEPENDENCY",
+    "EVIDENCE_SUPPORTS",
+    "EVIDENCE_CONTRADICTS",
+    "TEMPORALLY_FOLLOWS",
+    "PATTERN_MATCH",
+)
+
+RELATIONSHIP_STRENGTHS = ("STRONG", "MEDIUM", "WEAK")
+
+SCAM_CHAIN_STAGES = (
+    "INITIAL_CONTACT",
+    "AUTHORITY_IMPERSONATION",
+    "TRUST_BUILDING",
+    "INVESTMENT_PROMISE",
+    "DEPOSIT_REQUEST",
+    "FAKE_PLATFORM",
+    "FAKE_PROFIT",
+    "WITHDRAWAL_BLOCK",
+    "ADDITIONAL_PAYMENT",
+    "CREDENTIAL_REQUEST",
+    "OTP_REQUEST",
+    "DISAPPEARANCE",
+)
+
+STAGE_STATUSES = (
+    "OBSERVED",
+    "SUPPORTED",
+    "INFERRED",
+    "NOT_OBSERVED",
+    "UNKNOWN",
+)
+
+SCAM_TAXONOMY_PATTERNS = (
+    "INVESTMENT_SCAM",
+    "GUARANTEED_RETURN",
+    "FAKE_ADVISER",
+    "AUTHORITY_IMPERSONATION",
+    "UNREGISTERED_INTERMEDIARY",
+    "FAKE_TRADING_APP",
+    "SOCIAL_MEDIA_SOLICITATION",
+    "WITHDRAWAL_FEE_SCAM",
+    "THIRD_PARTY_PAYMENT",
+    "UPI_IMPERSONATION",
+    "PHISHING_CREDENTIAL_THEFT",
+    "OTP_THEFT",
+    "PONZI_PYRAMID",
+    "TASK_SCAM",
+)
+
+GRIEVANCE_CATEGORIES = (
+    "BROKER_GRIEVANCE",
+    "ADVISER_GRIEVANCE",
+    "EXCHANGE_GRIEVANCE",
+    "DEPOSITORY_GRIEVANCE",
+    "BANKING_PAYMENT_ISSUE",
+    "CYBER_FRAUD",
+    "INVESTMENT_SCAM",
+    "INFORMATION_REQUEST",
+    "UNKNOWN",
 )
 
 INVESTIGATION_STATUSES = (
@@ -905,4 +978,216 @@ class AuditEvent:
             metadata=dict(d.get("metadata", {})),
             ledger_hash=d.get("ledger_hash", ""),
         )
+
+
+# ---------------------------------------------------------------------------
+# 12. CorrelationEdge
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CorrelationEdge:
+    """Explicit, directional, and explainable relationship between investigative nodes."""
+
+    organization_id: str
+    investigation_id: str
+    source_id: str
+    source_type: str
+    target_id: str
+    target_type: str
+    relationship_type: str
+    strength: str
+    rationale: str
+    id: str = field(default_factory=lambda: new_id("corr"))
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+
+    def validate(self) -> list[str]:
+        errors: list[str] = []
+        require(bool(self.id), "id is required", errors)
+        require(bool(self.organization_id), "organization_id is required", errors)
+        require(bool(self.investigation_id), "investigation_id is required", errors)
+        require(bool(self.source_id), "source_id is required", errors)
+        require(bool(self.target_id), "target_id is required", errors)
+        require(bool(self.rationale.strip()), "rationale cannot be empty", errors)
+        validate_enum(self.relationship_type, RELATIONSHIP_TYPES, "relationship_type", errors)
+        validate_enum(self.strength, RELATIONSHIP_STRENGTHS, "strength", errors)
+        return errors
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "investigation_id": self.investigation_id,
+            "source_id": self.source_id,
+            "source_type": self.source_type,
+            "target_id": self.target_id,
+            "target_type": self.target_type,
+            "relationship_type": self.relationship_type,
+            "strength": self.strength,
+            "rationale": self.rationale,
+            "metadata": dict(self.metadata),
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "CorrelationEdge":
+        return cls(
+            organization_id=d["organization_id"],
+            investigation_id=d["investigation_id"],
+            source_id=d["source_id"],
+            source_type=d["source_type"],
+            target_id=d["target_id"],
+            target_type=d["target_type"],
+            relationship_type=d["relationship_type"],
+            strength=d["strength"],
+            rationale=d["rationale"],
+            id=d.get("id") or new_id("corr"),
+            metadata=dict(d.get("metadata", {})),
+            created_at=float(d.get("created_at", time.time())),
+        )
+
+
+# ---------------------------------------------------------------------------
+# 13. InvestigationStage
+# ---------------------------------------------------------------------------
+
+@dataclass
+class InvestigationStage:
+    """Scam-chain progression stage with strict evidentiary provenance."""
+
+    organization_id: str
+    investigation_id: str
+    stage: str
+    status: str
+    id: str = field(default_factory=lambda: new_id("stg"))
+    evidence_refs: list[str] = field(default_factory=list)
+    signal_refs: list[str] = field(default_factory=list)
+    details: str = ""
+    sequence_order: int = 0
+    created_at: float = field(default_factory=time.time)
+
+    def validate(self) -> list[str]:
+        errors: list[str] = []
+        require(bool(self.id), "id is required", errors)
+        require(bool(self.organization_id), "organization_id is required", errors)
+        require(bool(self.investigation_id), "investigation_id is required", errors)
+        validate_enum(self.stage, SCAM_CHAIN_STAGES, "stage", errors)
+        validate_enum(self.status, STAGE_STATUSES, "status", errors)
+        return errors
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "investigation_id": self.investigation_id,
+            "stage": self.stage,
+            "status": self.status,
+            "evidence_refs": list(self.evidence_refs),
+            "signal_refs": list(self.signal_refs),
+            "details": self.details,
+            "sequence_order": self.sequence_order,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "InvestigationStage":
+        return cls(
+            organization_id=d["organization_id"],
+            investigation_id=d["investigation_id"],
+            stage=d["stage"],
+            status=d["status"],
+            id=d.get("id") or new_id("stg"),
+            evidence_refs=list(d.get("evidence_refs", [])),
+            signal_refs=list(d.get("signal_refs", [])),
+            details=d.get("details", ""),
+            sequence_order=int(d.get("sequence_order", 0)),
+            created_at=float(d.get("created_at", time.time())),
+        )
+
+
+# ---------------------------------------------------------------------------
+# 14. GrievanceRecord
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GrievanceRecord:
+    """Official grievance routing determination with institutional channels and steps."""
+
+    organization_id: str
+    investigation_id: str
+    category: str
+    routing_channel: str
+    id: str = field(default_factory=lambda: new_id("grv"))
+    portal_url: Optional[str] = None
+    helpline: Optional[str] = None
+    guidance_steps: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+
+    def validate(self) -> list[str]:
+        errors: list[str] = []
+        require(bool(self.id), "id is required", errors)
+        require(bool(self.organization_id), "organization_id is required", errors)
+        require(bool(self.investigation_id), "investigation_id is required", errors)
+        validate_enum(self.category, GRIEVANCE_CATEGORIES, "category", errors)
+        require(bool(self.routing_channel.strip()), "routing_channel cannot be empty", errors)
+        return errors
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "investigation_id": self.investigation_id,
+            "category": self.category,
+            "routing_channel": self.routing_channel,
+            "portal_url": self.portal_url,
+            "helpline": self.helpline,
+            "guidance_steps": list(self.guidance_steps),
+            "metadata": dict(self.metadata),
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "GrievanceRecord":
+        return cls(
+            organization_id=d["organization_id"],
+            investigation_id=d["investigation_id"],
+            category=d["category"],
+            routing_channel=d["routing_channel"],
+            id=d.get("id") or new_id("grv"),
+            portal_url=d.get("portal_url"),
+            helpline=d.get("helpline"),
+            guidance_steps=list(d.get("guidance_steps", [])),
+            metadata=dict(d.get("metadata", {})),
+            created_at=float(d.get("created_at", time.time())),
+        )
+
+
+# ---------------------------------------------------------------------------
+# 15. InvestigationExplanation
+# ---------------------------------------------------------------------------
+
+@dataclass
+class InvestigationExplanation:
+    """Human-readable evidentiary explanation separating observable facts from explicit uncertainties."""
+
+    why_flagged: list[str] = field(default_factory=list)
+    what_we_do_not_know: list[str] = field(default_factory=list)
+    limitations: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "why_flagged": list(self.why_flagged),
+            "what_we_do_not_know": list(self.what_we_do_not_know),
+            "limitations": list(self.limitations),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "InvestigationExplanation":
+        return cls(
+            why_flagged=list(d.get("why_flagged", [])),
+            what_we_do_not_know=list(d.get("what_we_do_not_know", [])),
+            limitations=list(d.get("limitations", [])),
+        )
+
 

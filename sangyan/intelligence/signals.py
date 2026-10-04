@@ -39,8 +39,8 @@ SIGNAL_RULES: list[dict[str, Any]] = [
     {
         "signal_type": "GUARANTEED_RETURN",
         "pattern": re.compile(
-            r"(?i)\b(?:guaranteed?\s+(?:(?:\d+%|fixed)\s+)?returns?|"
-            r"(?:100%|\d+%)\s+guarantee[ds]?(?:\s+returns?)?|"
+            r"(?i)\b(?:guaranteed?\s+(?:(?:\d+%|fixed|daily|monthly|weekly|annual)\s+)*(?:returns?|profit|income|gains?)|"
+            r"(?:100%|\d+%)\s+guarantee[ds]?(?:\s+(?:monthly|daily|weekly|annual)?\s*returns?)?|"
             r"fixed\s+(?:monthly|daily|weekly|annual)?\s*returns?|"
             r"risk[- ]free\s+returns?|zero\s+risk(?:\s+investment)?|loss[- ]proof|"
             r"pakka\s+(?:munafa|profit|return)|100%\s+sure[- ]shot|100%\s+safe\s+and\s+secure\s+profit)\b"
@@ -98,7 +98,7 @@ SIGNAL_RULES: list[dict[str, Any]] = [
     {
         "signal_type": "WITHDRAWAL_FEE",
         "pattern": re.compile(
-            r"(?i)\b(?:pay\s+(?:[₹$€£]?\s*[\d,]+\s+)?(?:withdrawal\s+)?(?:tax|fee|deposit|charges?|margin)\s+(?:to\s+(?:withdraw|unlock)|before\s+withdrawal)|"
+            r"(?i)\b(?:pay\s+(?:[₹$€£]?\s*[\d,]+\s+)?(?:withdrawal\s+)?(?:tax|fee|deposit|charges?|margin)\s+(?:to\s+(?:withdraw|unlock|release|get)|before\s+withdrawal)|"
             r"withdrawal\s+(?:processing\s+)?(?:fee|charge)|"
             r"pay\s+\d+%\s+(?:gst|tax)\s+to\s+release\s+funds?|gas\s+fee\s+for\s+withdrawal)\b"
             r"|(?:पैसे\s+काढण्यासाठी\s+शुल्क|विड्रॉल\s+फी|टॅक्स\s+भरावा\s+लागेल)"

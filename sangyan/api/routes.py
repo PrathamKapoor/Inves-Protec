@@ -7,6 +7,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from sangyan.correlation.orchestrator import InvestigationOrchestrator
 from sangyan.core.errors import DomainValidationError, NotFoundError, PermissionDeniedError
 from sangyan.domain.models import Claim, ContentItem
 from sangyan.verification.engine import ClaimVerificationEngine, InvestigationReport, VerificationOutcome
@@ -28,9 +29,17 @@ class ContentVerifyRequest(BaseModel):
     user_id: Optional[str] = Field(default=None, description="Authenticated user identifier")
 
 
+class InvestigationBatchRequest(BaseModel):
+    contents: list[str] = Field(..., min_length=1, description="List of messages, claims, or URLs in investigation chain")
+    content_type: str = Field(default="text", description="text or url")
+    organization_id: Optional[str] = Field(default=None, description="Tenant organization ID")
+    user_id: Optional[str] = Field(default=None, description="Authenticated user identifier")
+
+
 def get_api_router(
     engine: ClaimVerificationEngine,
     repository_factory: Optional[Any] = None,
+    orchestrator: Optional[InvestigationOrchestrator] = None,
 ) -> APIRouter:
     """Build FastAPI router configured with verification engine and tenancy repository."""
     router = APIRouter(prefix="/api/v1", tags=["verification"])
@@ -207,4 +216,88 @@ def get_api_router(
         events = repo.list_audit_events(limit=limit, action=action)
         return [e.to_dict() for e in events]
 
+    @router.post("/investigate", response_model=dict[str, Any])
+    def run_investigation(req: InvestigationBatchRequest):
+        """Execute full Phase 4 investigation pipeline across single or multi-content inputs."""
+        repo = _get_repo(req.organization_id, req.user_id)
+        org_id = repo.organization_id if repo else (req.organization_id or "default_org")
+        usr_id = repo.user_id if repo else (req.user_id or "usr_analyst")
+
+        items: list[ContentItem] = []
+        for text in req.contents:
+            item = ContentItem(
+                organization_id=org_id,
+                content_type=req.content_type,
+                raw_content=text,
+            )
+            if repo:
+                try:
+                    repo.save_content_item(item)
+                except Exception:
+                    pass
+            items.append(item)
+
+        orch = orchestrator or InvestigationOrchestrator(verification_engine=engine)
+        report = orch.investigate(items, repository=repo, user_id=usr_id)
+        return report.to_dict()
+
+    @router.get("/investigations/{investigation_id}/correlations", response_model=list[dict[str, Any]])
+    def get_investigation_correlations(
+        investigation_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """Retrieve graph correlation edges for an investigation."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        corrs = repo.list_correlations_for_investigation(investigation_id)
+        return [c.to_dict() for c in corrs]
+
+    @router.get("/investigations/{investigation_id}/scam_chain", response_model=list[dict[str, Any]])
+    def get_investigation_scam_chain(
+        investigation_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """Retrieve reconstructed scam chain stages for an investigation."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        stages = repo.list_scam_chain_stages(investigation_id)
+        return [s.to_dict() for s in stages]
+
+    @router.get("/investigations/{investigation_id}/guidance", response_model=list[dict[str, Any]])
+    def get_investigation_guidance(
+        investigation_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """Retrieve safe non-investment action guidance for an investigation."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        try:
+            inv = repo.get_investigation(investigation_id)
+            guidance_items = [repo.get_guidance(gid) for gid in inv.guidance_ids]
+            return [g.to_dict() for g in guidance_items]
+        except NotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found")
+
+    @router.get("/investigations/{investigation_id}/grievance", response_model=Optional[dict[str, Any]])
+    def get_investigation_grievance(
+        investigation_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """Retrieve grievance classification and official resolution pathway for an investigation."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        record = repo.get_grievance_record(investigation_id)
+        if not record:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grievance record not found")
+        return record.to_dict()
+
     return router
+

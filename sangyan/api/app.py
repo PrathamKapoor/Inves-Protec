@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from sangyan.api.routes import get_api_router
 from sangyan.api.views import get_views_router
+from sangyan.correlation.orchestrator import InvestigationOrchestrator
 from sangyan.database.engine import DatabaseEngine, SQLiteDatabaseEngine
 from sangyan.database.migrations import MigrationRunner
 from sangyan.tenancy.repository import TenantRepository
@@ -25,12 +26,13 @@ def create_app(
     source_registry: Optional[AuthoritativeSourceRegistry] = None,
     snapshot_manager: Optional[SnapshotManager] = None,
     verification_engine: Optional[ClaimVerificationEngine] = None,
+    orchestrator: Optional[InvestigationOrchestrator] = None,
 ) -> FastAPI:
     """Create and configure a production-ready SANGYAN FastAPI application instance."""
     app = FastAPI(
         title="SANGYAN Authoritative Verification API",
         description="Public-good investor safety platform: authoritative claim verification, evidence provenance, and ML-DSA-65 post-quantum trust receipts.",
-        version="0.3.0",
+        version="0.4.0",
     )
 
     app.add_middleware(
@@ -58,11 +60,16 @@ def create_app(
         rate_limiter=RateLimiter(),
     )
 
+    orch = orchestrator or InvestigationOrchestrator(
+        verification_engine=verif_engine,
+        trust_binding=trust_binding,
+    )
+
     def repository_factory(org_id: str, usr_id: str) -> TenantRepository:
         return TenantRepository(db_engine, organization_id=org_id, user_id=usr_id)
 
     # Mount REST API and Inspection HTML views
-    api_router = get_api_router(verif_engine, repository_factory)
+    api_router = get_api_router(verif_engine, repository_factory, orch)
     views_router = get_views_router(repository_factory, t_service)
 
     app.include_router(api_router)
@@ -73,7 +80,7 @@ def create_app(
         return {
             "status": "healthy",
             "service": "sangyan-verification-engine",
-            "version": "0.3.0",
+            "version": "0.4.0",
             "sources_registered": len(src_reg.list_sources()),
         }
 

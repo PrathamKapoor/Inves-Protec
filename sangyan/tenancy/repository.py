@@ -13,10 +13,13 @@ from sangyan.domain.models import (
     Claim,
     ConfidenceVector,
     ContentItem,
+    CorrelationEdge,
     Entity,
     Evidence,
     Finding,
+    GrievanceRecord,
     Investigation,
+    InvestigationStage,
     Review,
     Signal,
     Source,
@@ -986,4 +989,221 @@ class TenantRepository:
             )
             for r in rows
         ]
+
+    # -----------------------------------------------------------------------
+    # Correlations & Relationships
+    # -----------------------------------------------------------------------
+
+    def save_correlation(self, edge: CorrelationEdge) -> str:
+        self._require_permission("investigation:create")
+        if edge.organization_id != self.organization_id:
+            raise PermissionDeniedError("correlation tenant does not match active organization")
+        problems = edge.validate()
+        if problems:
+            raise DomainValidationError(f"invalid correlation edge: {problems}", errors=problems)
+        self._db.execute(
+            """
+            INSERT INTO sangyan_correlations
+            (id, organization_id, investigation_id, source_id, source_type,
+             target_id, target_type, relationship_type, strength, rationale, metadata, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                edge.id,
+                edge.organization_id,
+                edge.investigation_id,
+                edge.source_id,
+                edge.source_type,
+                edge.target_id,
+                edge.target_type,
+                edge.relationship_type,
+                edge.strength,
+                edge.rationale,
+                json.dumps(edge.metadata),
+                edge.created_at,
+            ),
+        )
+        return edge.id
+
+    def get_correlation(self, corr_id: str) -> CorrelationEdge:
+        self._require_permission("investigation:read")
+        row = self._db.query_one(
+            "SELECT * FROM sangyan_correlations WHERE id=? AND organization_id=?",
+            (corr_id, self.organization_id),
+        )
+        if row is None:
+            raise NotFoundError(f"correlation '{corr_id}' not found in organization")
+        return CorrelationEdge(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            investigation_id=row["investigation_id"],
+            source_id=row["source_id"],
+            source_type=row["source_type"],
+            target_id=row["target_id"],
+            target_type=row["target_type"],
+            relationship_type=row["relationship_type"],
+            strength=row["strength"],
+            rationale=row["rationale"],
+            metadata=json.loads(row["metadata"] or "{}"),
+            created_at=row["created_at"],
+        )
+
+    def list_correlations_for_investigation(self, inv_id: str) -> list[CorrelationEdge]:
+        self._require_permission("investigation:read")
+        rows = self._db.query_all(
+            "SELECT * FROM sangyan_correlations WHERE investigation_id=? AND organization_id=? ORDER BY created_at ASC",
+            (inv_id, self.organization_id),
+        )
+        return [
+            CorrelationEdge(
+                id=r["id"],
+                organization_id=r["organization_id"],
+                investigation_id=r["investigation_id"],
+                source_id=r["source_id"],
+                source_type=r["source_type"],
+                target_id=r["target_id"],
+                target_type=r["target_type"],
+                relationship_type=r["relationship_type"],
+                strength=r["strength"],
+                rationale=r["rationale"],
+                metadata=json.loads(r["metadata"] or "{}"),
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    def find_correlations_by_target(self, target_id: str) -> list[CorrelationEdge]:
+        self._require_permission("investigation:read")
+        rows = self._db.query_all(
+            "SELECT * FROM sangyan_correlations WHERE target_id=? AND organization_id=? ORDER BY created_at ASC",
+            (target_id, self.organization_id),
+        )
+        return [
+            CorrelationEdge(
+                id=r["id"],
+                organization_id=r["organization_id"],
+                investigation_id=r["investigation_id"],
+                source_id=r["source_id"],
+                source_type=r["source_type"],
+                target_id=r["target_id"],
+                target_type=r["target_type"],
+                relationship_type=r["relationship_type"],
+                strength=r["strength"],
+                rationale=r["rationale"],
+                metadata=json.loads(r["metadata"] or "{}"),
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    # -----------------------------------------------------------------------
+    # Scam Chain Stages
+    # -----------------------------------------------------------------------
+
+    def save_scam_chain_stage(self, stage: InvestigationStage) -> str:
+        self._require_permission("investigation:create")
+        if stage.organization_id != self.organization_id:
+            raise PermissionDeniedError("stage tenant does not match active organization")
+        problems = stage.validate()
+        if problems:
+            raise DomainValidationError(f"invalid scam chain stage: {problems}", errors=problems)
+        self._db.execute(
+            """
+            INSERT INTO sangyan_scam_chain_stages
+            (id, organization_id, investigation_id, stage, status,
+             evidence_refs, signal_refs, details, sequence_order, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                stage.id,
+                stage.organization_id,
+                stage.investigation_id,
+                stage.stage,
+                stage.status,
+                json.dumps(stage.evidence_refs),
+                json.dumps(stage.signal_refs),
+                stage.details,
+                stage.sequence_order,
+                stage.created_at,
+            ),
+        )
+        return stage.id
+
+    def list_scam_chain_stages(self, inv_id: str) -> list[InvestigationStage]:
+        self._require_permission("investigation:read")
+        rows = self._db.query_all(
+            "SELECT * FROM sangyan_scam_chain_stages WHERE investigation_id=? AND organization_id=? "
+            "ORDER BY sequence_order ASC, created_at ASC",
+            (inv_id, self.organization_id),
+        )
+        return [
+            InvestigationStage(
+                id=r["id"],
+                organization_id=r["organization_id"],
+                investigation_id=r["investigation_id"],
+                stage=r["stage"],
+                status=r["status"],
+                evidence_refs=json.loads(r["evidence_refs"] or "[]"),
+                signal_refs=json.loads(r["signal_refs"] or "[]"),
+                details=r["details"],
+                sequence_order=r["sequence_order"],
+                created_at=r["created_at"],
+            )
+            for r in rows
+        ]
+
+    # -----------------------------------------------------------------------
+    # Grievance Records
+    # -----------------------------------------------------------------------
+
+    def save_grievance_record(self, record: GrievanceRecord) -> str:
+        self._require_permission("investigation:create")
+        if record.organization_id != self.organization_id:
+            raise PermissionDeniedError("grievance record tenant does not match active organization")
+        problems = record.validate()
+        if problems:
+            raise DomainValidationError(f"invalid grievance record: {problems}", errors=problems)
+        self._db.execute(
+            """
+            INSERT INTO sangyan_grievance_records
+            (id, organization_id, investigation_id, category, routing_channel,
+             portal_url, helpline, guidance_steps, metadata, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                record.id,
+                record.organization_id,
+                record.investigation_id,
+                record.category,
+                record.routing_channel,
+                record.portal_url,
+                record.helpline,
+                json.dumps(record.guidance_steps),
+                json.dumps(record.metadata),
+                record.created_at,
+            ),
+        )
+        return record.id
+
+    def get_grievance_record(self, inv_id: str) -> GrievanceRecord | None:
+        self._require_permission("investigation:read")
+        row = self._db.query_one(
+            "SELECT * FROM sangyan_grievance_records WHERE investigation_id=? AND organization_id=?",
+            (inv_id, self.organization_id),
+        )
+        if row is None:
+            return None
+        return GrievanceRecord(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            investigation_id=row["investigation_id"],
+            category=row["category"],
+            routing_channel=row["routing_channel"],
+            portal_url=row["portal_url"],
+            helpline=row["helpline"],
+            guidance_steps=json.loads(row["guidance_steps"] or "[]"),
+            metadata=json.loads(row["metadata"] or "{}"),
+            created_at=row["created_at"],
+        )
+
 

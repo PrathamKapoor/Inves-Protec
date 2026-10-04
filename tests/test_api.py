@@ -194,3 +194,42 @@ def test_html_inspection_investigation(app_and_repo):
     assert "Investigation Overview" in res.text
     assert "SAFE" in res.text
     assert "Zerodha is SEBI registered." in res.text
+
+
+def test_investigate_batch_api(app_and_repo):
+    client, repo, org_id, user_id = app_and_repo
+    payload = {
+        "contents": [
+            "Join our VIP Telegram group for guaranteed stock recommendations: https://t.me/profit_club",
+            "Pay via UPI to zerodha.pay@okhdfcbank or fastprofit@paytm",
+            "Withdrawal blocked. Pay ₹15,000 withdrawal tax to release funds immediately.",
+        ],
+        "content_type": "text",
+        "organization_id": org_id,
+        "user_id": user_id,
+    }
+    res = client.post("/api/v1/investigate", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["overall_status"] == "HIGH_RISK"
+    assert data["content_count"] == 3
+    assert len(data["scam_chain"]) == 12
+    assert len(data["correlations"]) >= 1
+    assert len(data["guidance"]) >= 1
+    assert data["grievance"]["category"] in {"INVESTMENT_SCAM", "CYBER_FRAUD"}
+    assert "1930" in data["grievance"]["helpline"]
+
+    # Test querying sub-resources
+    inv_id = data["investigation_id"]
+    res_corr = client.get(f"/api/v1/investigations/{inv_id}/correlations?organization_id={org_id}&user_id={user_id}")
+    assert res_corr.status_code == 200
+    assert len(res_corr.json()) >= 1
+
+    res_sc = client.get(f"/api/v1/investigations/{inv_id}/scam_chain?organization_id={org_id}&user_id={user_id}")
+    assert res_sc.status_code == 200
+    assert len(res_sc.json()) == 12
+
+    res_grv = client.get(f"/api/v1/investigations/{inv_id}/grievance?organization_id={org_id}&user_id={user_id}")
+    assert res_grv.status_code == 200
+    assert res_grv.json()["category"] in {"INVESTMENT_SCAM", "CYBER_FRAUD"}
+

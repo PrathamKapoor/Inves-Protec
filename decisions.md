@@ -450,6 +450,122 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Ready-to-deploy FastAPI application providing both machine-readable JSON contracts and human-readable audit views.
 - Files: `sangyan/api/app.py`, `sangyan/api/routes.py`, `sangyan/api/views.py`, `tests/test_api.py`
 
+---
+
+### D-030: Graph Correlation Model & Strength Hierarchy (STRONG/MEDIUM/WEAK)
+- Date / phase / commit: 2026-10-04, Phase 4
+- Context: Phase 4 mandates transforming atomic claims, resolved entities, and safety signals across multiple content items into a connected investigation graph without false linkages or unbounded memory/cycle expansion.
+- Decision: Implemented `InvestigationCorrelator` (`sangyan/correlation/correlator.py`):
+  1. Standardized relationship types (`SHARED_ENTITY`, `SHARED_PAYMENT`, `SHARED_CONTACT`, `SHARED_INFRASTRUCTURE`, `COMMON_PATTERN`, `TEMPORAL_SEQUENCE`, `CLAIM_LINK`, `ENTITY_LINK`) and strength tiers (`STRONG`, `MEDIUM`, `WEAK`).
+  2. Defined explicit strength rules: Direct shared payment VPAs, registration numbers, domains, phone numbers, or mutual contradictions establish `STRONG` edges; fuzzy aliases or claim corroboration establish `MEDIUM` edges; co-occurrence or loose pattern overlaps establish `WEAK` edges.
+  3. Enforced bounded traversal safeguards: Maximum 5 hops depth, 200 edges per investigation subgraph, and 25 related content items limit.
+  4. Cycle avoidance: DFS/BFS traversal tracks visited vertex sets, preventing infinite recursion on self-referential or cyclic graph structures.
+  5. Canonical normalizers: Dedicated canonicalizers for phone numbers (E.164-like stripped digits), UPI VPAs (lowercase stripped), domains (fqdn lowercase), and registration numbers (alphanumeric uppercase).
+- Why: Provides a deterministic, mathematically bounded correlation network representing multi-content syndicate links while preventing DoS via cyclic or dense graphs.
+- Alternatives considered: External graph database like Neo4j (rejected: introduces heavy operational dependency for tenant-scoped relational queries; in-memory/SQLite relational model is self-contained and reproducible).
+- Consequences: Investigations cleanly link related content items and cross-entity networks with explicit evidentiary strength.
+- Files: `sangyan/correlation/correlator.py`, `sangyan/domain/models.py`, `tests/test_correlation.py`
+
+---
+
+### D-031: 12-Stage Scam-Chain Reconstruction & Inferred Stage Semantics
+- Date / phase / commit: 2026-10-04, Phase 4
+- Context: Financial fraud follows an observable lifecycle (lure -> platform access -> credential harvesting -> withdrawal fee/block). Phase 4 requires reconstructing this lifecycle across 12 discrete stages with explicit epistemic statuses (`OBSERVED`, `SUPPORTED`, `INFERRED`, `NOT_OBSERVED`, `UNKNOWN`) and avoiding false accusations on regulatory warnings.
+- Decision: Implemented `ScamChainReconstructor` (`sangyan/correlation/scam_chains.py`):
+  1. Reconstructs 12 stages: `LURE_FIRST_CONTACT`, `PLATFORM_ACCESS`, `TRUST_BUILDING`, `GROUP_INDOCCTRINATION`, `CREDENTIAL_HARVESTING`, `INITIAL_DEPOSIT`, `FICTITIOUS_RETURNS`, `ESCALATION_COERCION`, `WITHDRAWAL_ATTEMPT`, `FEE_EXTORTION`, `COMMUNICATION_TERMINATION`, `SECONDARY_RECOVERY_SCAM`.
+  2. Status semantics:
+     - `OBSERVED`: Direct observable signal or claim matches stage indicators.
+     - `SUPPORTED`: Validated by corroborating authoritative evidence or regulatory findings.
+     - `INFERRED`: Logical prerequisite or downstream consequence of observed stages (e.g. withdrawal fee extortion implies prior fictitious returns and deposit stages).
+     - `NOT_OBSERVED`: No indicators present for this stage in analyzed materials.
+     - `UNKNOWN`: Incomplete or ambiguous data.
+  3. Hard-negative suppression: When content contains legitimate regulatory warnings (e.g. SEBI caution circulars, broker advisories), all 12 stages are explicitly evaluated as `NOT_OBSERVED` to prevent treating the warning itself as scam progression.
+- Why: Gives victims and investigators a transparent visual breakdown of where the interaction stands in the scam lifecycle without hallucinating unobserved events.
+- Alternatives considered: Linear state machine requiring every prior stage to be observed before advancing (rejected: real-world reporting often begins at later stages such as withdrawal blockage or fee demands).
+- Consequences: Clear chronological and causal mapping of fraudulent schemes.
+- Files: `sangyan/correlation/scam_chains.py`, `sangyan/domain/models.py`, `tests/test_correlation.py`
+
+---
+
+### D-032: Multi-Label Controlled Scam Taxonomy Classification
+- Date / phase / commit: 2026-10-04, Phase 4
+- Context: Financial frauds frequently exhibit overlapping characteristics (e.g. a fake IPO scheme operating via an impersonated Telegram channel demanding personal UPI transfers). Systems that force single-label classification lose critical operational intelligence.
+- Decision: Implemented `ScamTaxonomyClassifier` (`sangyan/correlation/taxonomy.py`):
+  1. Implemented a controlled 14-pattern taxonomy: `UNAUTHORIZED_ADVISORY`, `GUARANTEED_RETURN_SCHEME`, `REGULATOR_IMPERSONATION`, `BROKER_IMPERSONATION`, `DIGITAL_ARREST_EXTORTION`, `PUMP_AND_DUMP`, `TASK_BASED_INVESTMENT_FRAUD`, `FAKE_TRADING_PLATFORM`, `UNREGISTERED_PMS_AIF`, `RECOVERY_ROOM_FRAUD`, `ALGO_TRADING_PONZI`, `OFFSHORE_FOREX_CRYPTO_SOLICITATION`, `PRE_IPO_UNLISTED_SHARE_FRAUD`, `PONZI_MULTI_TIER_REFERRAL`.
+  2. Multi-label coexistence: Multiple patterns can be active simultaneously if their distinct signal and evidence requirements are satisfied.
+  3. Zero bare-keyword triggering: Every pattern requires a combination of detected signals, resolved entity types, and/or authoritative contradiction findings (e.g. `REGULATOR_IMPERSONATION` requires statutory authority mention + contradiction/impersonation signal).
+  4. Safe fallback: Returns an empty pattern set if no pattern meets the rigorous multi-signal threshold, avoiding speculative categorization.
+- Why: Provides institutional investigators with accurate, multi-faceted fraud classifications grounded strictly in verified signals and registry contradictions.
+- Alternatives considered: Monolithic single-label classification or keyword-bag matching (rejected: produces severe false positives and obscures multi-vector attack tactics).
+- Consequences: Rich, multi-dimensional pattern attribution with deterministic explainability.
+- Files: `sangyan/correlation/taxonomy.py`, `sangyan/domain/models.py`, `tests/test_correlation.py`
+
+---
+
+### D-033: Non-Investment Conditional Safe Guidance & Incident Preservation Checklist
+- Date / phase / commit: 2026-10-04, Phase 4
+- Context: Retail investors in distress require clear, non-speculative, actionable steps to safeguard funds and preserve evidence. However, SANGYAN must never offer financial, trading, or investment advice (buy/sell/hold/broker endorsements).
+- Decision: Implemented `GuidanceEngine` (`sangyan/correlation/guidance.py`):
+  1. Strict non-investment scope: Guidance is exclusively operational, security, and legal/regulatory protection.
+  2. Conditional next-step guidance:
+     - Urgent financial freeze: Immediate recommendation to dial 1930 / visit cybercrime.gov.in and request banking golden-hour freeze if funds were transferred.
+     - Device & credential hygiene: Revocation of remote access tools (AnyDesk, TeamViewer), changing banking credentials, and enabling hardware 2FA.
+     - Communication cessation: Cease all dialogue with solicitants; never pay secondary "clearance" or "tax" fees.
+  3. Forensic incident preservation checklist:
+     - Systematic instructions to preserve unedited chat exports, payment transaction IDs (UTR, VPA, bank statements), app APKs/URLs, and caller phone numbers.
+- Why: Empowers users to mitigate immediate financial loss and secure admissible digital evidence without violating regulatory advisory prohibitions.
+- Alternatives considered: Generic "be careful" warnings (rejected: unhelpful during active fraud) or automated payment reversals (rejected: technically impossible without direct banking switch integration).
+- Consequences: Actionable, legally compliant, victim-centric safety directives.
+- Files: `sangyan/correlation/guidance.py`, `sangyan/domain/models.py`, `tests/test_correlation.py`
+
+---
+
+### D-034: Grievance Problem Classification & Official Institutional Routing
+- Date / phase / commit: 2026-10-04, Phase 4
+- Context: When an investor experiences fraud or malfeasance, filing a grievance with the wrong regulatory authority (e.g. filing a banking cyber-theft with SEBI instead of Cybercrime/1930, or filing an unlisted share grievance with RBI) causes critical delays and administrative rejections.
+- Decision: Implemented `GrievanceRouter` (`sangyan/correlation/grievance.py`):
+  1. Categorizes user situations into 9 distinct grievance classes: `UNREGISTERED_INTERMEDIARY_SEBI`, `INVESTOR_FRAUD_CYBERCRIME`, `BANKING_PAYMENT_FAILURE_RBI`, `TELECOM_SPAM_PHISHING_CHAKSHU`, `UNAUTHORIZED_PMS_AIF_SEBI`, `MARKET_MANIPULATION_SEBI`, `BROKER_DEFICIENCY_SEBI_EXCHANGE`, `FAKE_PLATFORM_CYBERCRIME`, `GENERAL_INQUIRY`.
+  2. Maps directly to authoritative Indian regulatory grievance portals:
+     - Cybercrime Portal (`cybercrime.gov.in` / Helpline 1930): Financial cyber-fraud, digital arrest, fake trading apps.
+     - SEBI SCORES 2.0 (`scores.sebi.gov.in`): Unregistered investment advisors, research analysts, fraudulent stock tips.
+     - RBI CMS (`cms.rbi.org.in`): Banking transaction unauthorized debits, payment system operator failures.
+     - DoT Chakshu (`sancharsaathi.gov.in`): Suspected telecom fraud, spoofed SMS, scam WhatsApp/Telegram numbers.
+  3. No automated external submission: Formulates structured filing dossiers and checklists for the user while leaving final submission strictly in human hands.
+- Why: Directs aggrieved investors to the exact statutory authority with legal jurisdiction over their specific grievance, accelerating remedial action.
+- Alternatives considered: Direct API submission to SCORES/Cybercrime (rejected: requires institutional API keys, OTPs, and personal victim affidavits).
+- Consequences: Accurate, multi-agency routing guidance tailored to the specific evidentiary findings.
+- Files: `sangyan/correlation/grievance.py`, `sangyan/domain/models.py`, `tests/test_correlation.py`
+
+---
+
+### D-035: Epistemic Explainability & Mandatory Uncertainty Abstention
+- Date / phase / commit: 2026-10-04, Phase 4
+- Context: Black-box AI risk scores undermine user and regulator trust. An investor-safety platform must explain exactly why a conclusion was reached, link directly to authoritative evidence, and explicitly state what remains unknown or unverified.
+- Decision: Implemented `InvestigationExplainer` (`sangyan/correlation/explainer.py`):
+  1. "Why was this flagged?" synthesis: Assembles bullet-pointed rationales tied directly to observable signals, contradictory regulatory evidence, unregistered entities, and unverified payment channels.
+  2. Direct evidentiary linkage: Each explanation item includes references to the supporting evidence IDs and registry sources.
+  3. Mandatory "What we don't know" abstentions: Systematically enumerates unverified entities, claims with `INSUFFICIENT_EVIDENCE`, missing transaction proofs, and unconfirmed beneficial ownership.
+  4. Preserves epistemic humility: Never emits definitive fraud conclusions when evidence is absent; labels such states as unverified rather than safe or fraudulent.
+- Why: Complies with high-stakes financial transparency standards and prevents both false positives and dangerous false assurances.
+- Alternatives considered: Free-form LLM-generated summaries without evidence bounds (rejected: prone to hallucinations, false certainty, and ungrounded speculation).
+- Consequences: Defensible, human-auditable explanations for every investigation report.
+- Files: `sangyan/correlation/explainer.py`, `sangyan/domain/models.py`, `tests/test_correlation.py`
+
+---
+
+### D-036: Investigation-Level ML-DSA-65 Post-Quantum Trust Binding
+- Date / phase / commit: 2026-10-04, Phase 4
+- Context: Correlated investigation reports aggregate findings, scam stages, guidance, and grievance records. To be forensically admissible and tamper-evident across organizational boundaries, the unified investigation dossier must be cryptographically signed using post-quantum cryptography.
+- Decision: Extended `TrustService` (`sangyan/verification/trust_binding.py`):
+  1. Built canonical investigation payload generator `build_investigation_payload()` combining investigation ID, tenant ID, content hashes, correlation graph digest, scam patterns, chain stages, guidance, and grievance records.
+  2. Applied NIST FIPS 204 ML-DSA-65 post-quantum digital signature to the canonical investigation payload.
+  3. Integrated `bind_investigation()` and `verify_investigation_integrity()` into the `InvestigationOrchestrator` workflow.
+  4. Encapsulated signatures in standard `TrustReceipt` objects, maintaining seamless compatibility with the Phase 1 trust layer.
+- Why: Guarantees post-quantum cryptographic immutability and non-repudiation for entire multi-content investigative dossiers.
+- Alternatives considered: Classical RSA or ECDSA signatures (rejected: vulnerable to future quantum cryptanalysis; ML-DSA-65 is the established SANGYAN platform standard).
+- Consequences: Legally and forensically robust investigation records verifiable by third-party auditors.
+- Files: `sangyan/verification/trust_binding.py`, `sangyan/correlation/orchestrator.py`, `tests/test_correlation.py`
+
 
 
 

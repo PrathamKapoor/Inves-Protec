@@ -179,3 +179,117 @@ Financial claim verification uses five mutually exclusive stances (`ClaimStatus`
    For claims resolved as `INSUFFICIENT_EVIDENCE`, human inspection views prominently render the mandatory statutory notice:
    *"Absence of evidence is not proof of fraud or non-compliance. Verification was unable to locate authoritative regulatory records for the specified identifiers within available registries."*
 
+---
+
+## 6. Phase 4 Investigation Correlation & Guidance Models
+
+Phase 4 introduces multi-content correlation, scam-chain lifecycle reconstruction, grievance classification, and explainability contracts.
+
+### 6.1 `CorrelationEdge` (`sangyan.domain.models`)
+- **Purpose**: Represents a typed, weighted relationship connecting two nodes (entities, claims, signals, or content items) within an investigation graph.
+- **Key Fields**:
+  - `edge_id`: Unique identifier (`edge_...`).
+  - `investigation_id`: Parent investigation ID.
+  - `source_node_id` & `target_node_id`: Connected node identifiers.
+  - `relationship_type`: `SHARED_ENTITY`, `SHARED_PAYMENT`, `SHARED_CONTACT`, `SHARED_INFRASTRUCTURE`, `COMMON_PATTERN`, `TEMPORAL_SEQUENCE`, `CLAIM_LINK`, `ENTITY_LINK`.
+  - `strength`: `STRONG`, `MEDIUM`, `WEAK`.
+  - `evidence_ids`: List of supporting evidence IDs justifying the link.
+  - `confidence`: Confidence float (0.0 to 1.0).
+  - `tenant_id`: Multi-tenant boundary.
+
+### 6.2 `InvestigationStage` (`sangyan.domain.models`)
+- **Purpose**: Represents the status and evidence for one of the 12 lifecycle stages in a scam chain.
+- **Key Fields**:
+  - `stage_id`: Unique identifier (`stg_...`).
+  - `investigation_id`: Parent investigation ID.
+  - `stage_name`: One of the 12 canonical stages (`LURE_FIRST_CONTACT` through `SECONDARY_RECOVERY_SCAM`).
+  - `status`: `OBSERVED`, `SUPPORTED`, `INFERRED`, `NOT_OBSERVED`, `UNKNOWN`.
+  - `observed_at`: ISO timestamp when detected.
+  - `evidence_ids`: Authoritative evidence identifiers corroborating the stage.
+  - `notes`: Human-readable context and rationale.
+  - `tenant_id`: Multi-tenant boundary.
+
+### 6.3 `GrievanceRecord` (`sangyan.domain.models`)
+- **Purpose**: Tracks an investor's problem classification and authoritative institutional filing guidance.
+- **Key Fields**:
+  - `grievance_id`: Unique identifier (`grv_...`).
+  - `investigation_id`: Parent investigation ID.
+  - `category`: Problem category (`UNREGISTERED_INTERMEDIARY_SEBI`, `INVESTOR_FRAUD_CYBERCRIME`, `BANKING_PAYMENT_FAILURE_RBI`, `TELECOM_SPAM_PHISHING_CHAKSHU`, etc.).
+  - `target_portal`: Official statutory destination (`Cybercrime Portal (cybercrime.gov.in / 1930)`, `SEBI SCORES 2.0 (scores.sebi.gov.in)`, `RBI CMS (cms.rbi.org.in)`, `DoT Chakshu (sancharsaathi.gov.in)`).
+  - `status`: Lifecycle state (`DRAFT`, `READY`, `FILED`, `RESOLVED`).
+  - `filing_checklist`: Structured list of documents and forensic artifacts required for submission.
+  - `filing_dossier`: Pre-filled JSON payload containing incident facts and evidence references.
+  - `tenant_id`: Multi-tenant boundary.
+
+### 6.4 `InvestigationExplanation` (`sangyan.domain.models`)
+- **Purpose**: Epistemic explanation answering "Why was this flagged?" with mandatory uncertainty disclosure.
+- **Key Fields**:
+  - `explanation_id`: Unique identifier.
+  - `investigation_id`: Parent investigation ID.
+  - `overall_narrative`: Comprehensive summary of findings.
+  - `why_flagged`: Bullet-pointed list of observable signals, contradictory evidence, and syndicate links.
+  - `evidence_links`: Dict mapping finding/claim IDs to authoritative evidence citations.
+  - `what_we_dont_know`: Explicit list of unverified assertions, missing evidence, and unconfirmed entities.
+  - `abstention_reasons`: Explicit justifications for why certain conclusions could not be drawn.
+
+### 6.5 `CorrelatedInvestigationReport` (`sangyan.correlation.orchestrator`)
+- **Purpose**: End-to-end multi-content investigative dossier signed with post-quantum cryptography.
+- **Key Fields**:
+  - `investigation`: Root `Investigation` domain object.
+  - `content_items`: List of analyzed `ContentItem` objects.
+  - `outcomes`: List of claim-level `VerificationOutcome` objects.
+  - `correlations`: List of `CorrelationEdge` objects.
+  - `scam_patterns`: List of matched `SCAM_TAXONOMY_PATTERNS`.
+  - `scam_chain_stages`: List of `InvestigationStage` objects.
+  - `guidance`: `SafeGuidanceResponse` containing urgent actions, checklists, and safe next steps.
+  - `grievance_record`: Generated `GrievanceRecord` for official portal submission.
+  - `explanation`: `InvestigationExplanation` with explicit abstentions.
+  - `trust_receipt`: Cryptographically signed `TrustReceipt` using ML-DSA-65.
+
+---
+
+## 7. Database Migration 002 Schema Expansion
+
+Migration 002 (`sangyan/database/migrations.py`) registers three dedicated tables:
+
+1. `sangyan_correlations`:
+   - `edge_id` (PK, TEXT)
+   - `investigation_id` (TEXT, NOT NULL)
+   - `organization_id` (TEXT, NOT NULL)
+   - `source_node_id` (TEXT, NOT NULL)
+   - `target_node_id` (TEXT, NOT NULL)
+   - `relationship_type` (TEXT, NOT NULL)
+   - `strength` (TEXT, NOT NULL)
+   - `confidence` (REAL, NOT NULL)
+   - `evidence_ids` (TEXT, JSON array)
+   - `metadata` (TEXT, JSON object)
+   - `created_at` (TEXT, ISO-8601)
+   - Scoped indexes on `(organization_id, investigation_id)` and `(organization_id, target_node_id)`.
+
+2. `sangyan_scam_chain_stages`:
+   - `stage_id` (PK, TEXT)
+   - `investigation_id` (TEXT, NOT NULL)
+   - `organization_id` (TEXT, NOT NULL)
+   - `stage_name` (TEXT, NOT NULL)
+   - `status` (TEXT, NOT NULL)
+   - `observed_at` (TEXT)
+   - `evidence_ids` (TEXT, JSON array)
+   - `notes` (TEXT)
+   - `metadata` (TEXT, JSON object)
+   - `created_at` (TEXT, ISO-8601)
+   - Scoped index on `(organization_id, investigation_id)`.
+
+3. `sangyan_grievance_records`:
+   - `grievance_id` (PK, TEXT)
+   - `investigation_id` (TEXT, NOT NULL)
+   - `organization_id` (TEXT, NOT NULL)
+   - `category` (TEXT, NOT NULL)
+   - `target_portal` (TEXT, NOT NULL)
+   - `status` (TEXT, NOT NULL)
+   - `filing_checklist` (TEXT, JSON array)
+   - `filing_dossier` (TEXT, JSON object)
+   - `created_at` (TEXT, ISO-8601)
+   - `updated_at` (TEXT, ISO-8601)
+   - Scoped index on `(organization_id, investigation_id)`.
+
+
