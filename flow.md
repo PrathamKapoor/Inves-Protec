@@ -917,3 +917,62 @@ Client Submission (POST /workflow/start?async_exec=true)
    - Step 3: Promote standby replica via `pg_promote()` and increment cluster epoch in `sangyan_region_fencing`.
    - Step 4: Reconcile linear cryptographic audit continuity across the failover boundary.
 4. **Operator CLI**: Accessible via `sangyan db replication-status`, `sangyan db promote --region <r> --confirm`, and `sangyan db switchover --primary <p> --standby <s> --confirm`.
+
+---
+
+## 16. Final Product Transformation: Editorial Web Architecture & Investigation Workbench
+
+```text
+                                  [ CLIENT BROWSER ]
+                                          │
+                  ┌───────────────────────┴───────────────────────┐
+                  ▼                                               ▼
+         GET / (Landing Page)                           GET /workbench (or /app)
+    ┌───────────────────────────┐                   ┌───────────────────────────────┐
+    │  Denmu Editorial Design   │                   │    Investigation Workbench    │
+    │  - Dark charcoal #07090e  │                   │  - 10-Stage Pipeline Stepper  │
+    │  - Grainient Shader Canvas│                   │  - Decomposed Claims Table    │
+    │  - 4-Tier Authority Strip │                   │  - Interactive SVG Graph      │
+    │  - 3 Product Modes        │                   │  - 12-Stage Scam Chain        │
+    │  - 1-Click Demo Launcher  │                   │  - TRUST-SAT Post-Quantum Card│
+    │  - FIPS 204 Proofs        │                   │  - SEBI / 1930 Grievance Docs │
+    └─────────────┬─────────────┘                   └───────────────┬───────────────┘
+                  │                                                 │
+                  ▼                                                 ▼
+    ┌───────────────────────────┐                   ┌───────────────────────────────┐
+    │     sangyan/web/          │                   │  GET /api/v1/investigations/  │
+    │  - landing.py             │                   │      {id}/events (SSE Stream) │
+    │  - workbench.py           │                   └───────────────┬───────────────┘
+    │  - demo_fixtures.py       │                                   │
+    └───────────────────────────┘                                   ▼
+                                                    ┌───────────────────────────────┐
+                                                    │ Real-Time Telemetry Terminal  │
+                                                    │ - Monotonic Sequence (#1..#N) │
+                                                    │ - Real-Time Stepper Advance   │
+                                                    │ - Cryptographic Seal Trigger  │
+                                                    └───────────────────────────────┘
+```
+
+### 16.1 Editorial Design & Zero-Tooling Architecture
+1. **Denmu Visual Hierarchy**:
+   - Palette: Strict dark charcoal base (`#07090e`), elevated surface panels (`#0c0f17`, `#111622`), off-white typography (`#f8fafc`, `#94a3b8`), electric purple / violet accents (`#7c3aed`, `#8b5cf6`, `#6366f1`), and crisp micro-borders (`1px solid rgba(255, 255, 255, 0.08)`).
+   - Typography: Clean modernist grotesque (`Inter`) paired with technical monospace (`JetBrains Mono`).
+   - Grainient Shader: Lightweight canvas shader blending mathematical violet, indigo, and cyan drift with procedural film grain overlay, with automatic `prefers-reduced-motion` suppression.
+2. **Zero External Build Tooling**:
+   - Complete HTML, CSS, and vanilla JS are packaged directly within `sangyan/web/` and served via FastAPI `HTMLResponse` in `sangyan/api/views.py`.
+   - Eliminates node, npm, webpack, or Next.js build-step drift, guaranteeing instant response times and zero runtime dependency issues.
+
+### 16.2 Investigation Workbench Capabilities
+1. **10-Stage Pipeline Stepper**:
+   - Visual capsules track progress through Intake, Intelligence, Verification, Correlation, Scam Chain, Guidance, Explanation, Review Gate, Trust Seal, and Complete.
+   - Synchronizes in real time with incoming SSE stream events (`INTAKE_COMPLETED`, `VERIFICATION_COMPLETED`, etc.).
+2. **Interactive SVG Evidence Graph**:
+   - Dynamic node-link network rendering Investigation root, Claims, Entities (Telegram channels, fake advisors), Payment VPAs, and Authoritative Sources (SEBI, RBI).
+   - Clickable nodes with real-time inspector drawer displaying identifiers, authority tiers, and cryptographic links.
+3. **12-Stage Scam Chain Timeline**:
+   - Reconstructs the end-to-end criminal funnel from initial social bait to final identity burn and loss realization, categorizing each phase as `DETECTED`, `SUSPECTED`, or `UNVERIFIED`.
+4. **TRUST-SAT Post-Quantum Verification Panel**:
+   - Live interactive `[ VERIFY RECEIPT ]` trigger validating the ML-DSA-65 post-quantum digital signature against the canonical SHA3-256 digest, verifying NIST FIPS 204 lattice integrity.
+5. **Statutory Grievance & Remediation Blueprints**:
+   - Pre-formatted complaint drafts citing specific regulatory provisions for SEBI SCORES 2.0 (`scores.sebi.gov.in`) and the 1930 National Cybercrime Reporting Portal (`cybercrime.gov.in`).
+   - Single-click cryptographic dossier export in standard JSON format for evidentiary submission under Section 65B of the Indian Evidence Act.

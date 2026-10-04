@@ -1,4 +1,4 @@
-"""HTML inspection views for human audit of claims, authoritative evidence, and trust receipts."""
+"""HTML inspection views and web interfaces for SANGYAN Investor Safety Platform."""
 from __future__ import annotations
 
 import html
@@ -10,14 +10,17 @@ from fastapi.responses import HTMLResponse
 
 from sangyan.core.errors import NotFoundError, PermissionDeniedError
 from sangyan.domain.models import Claim, Evidence, Finding, Investigation
+from sangyan.web.demo_fixtures import get_demo_case, get_demo_cases
+from sangyan.web.landing import render_landing_page
+from sangyan.web.workbench import render_workbench_page
 
 
 def get_views_router(
     repository_factory: Optional[Any] = None,
     trust_service: Optional[Any] = None,
 ) -> APIRouter:
-    """Build router for lightweight HTML inspection views."""
-    router = APIRouter(prefix="/inspect", tags=["inspection_ui"])
+    """Build router for web landing, investigation workbench, and HTML inspection views."""
+    router = APIRouter(tags=["web_and_inspection_ui"])
 
     def _get_repo(org_id: Optional[str], usr_id: Optional[str]):
         if repository_factory and org_id and usr_id:
@@ -27,7 +30,47 @@ def get_views_router(
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
         return None
 
-    @router.get("/claim/{claim_id}", response_class=HTMLResponse)
+    # -----------------------------------------------------------------------
+    # Public Web Routes: Landing Page & Workbench
+    # -----------------------------------------------------------------------
+
+    @router.get("/", response_class=HTMLResponse)
+    def landing_page():
+        """Render Denmu-style public editorial landing page with Grainient shader and evidence showcase."""
+        return HTMLResponse(content=render_landing_page())
+
+    @router.get("/workbench", response_class=HTMLResponse)
+    def investigation_workbench():
+        """Render interactive investigation workbench with live SSE, graph, and trust receipts."""
+        return HTMLResponse(content=render_workbench_page())
+
+    @router.get("/app", response_class=HTMLResponse)
+    def app_workbench_alias():
+        """Direct alias for investigation workbench."""
+        return HTMLResponse(content=render_workbench_page())
+
+    # -----------------------------------------------------------------------
+    # Interactive Walkthrough & Demo API Endpoints
+    # -----------------------------------------------------------------------
+
+    @router.get("/api/v1/demo/cases")
+    def list_demo_cases():
+        """Return metadata for all preloaded interactive demo cases."""
+        return get_demo_cases()
+
+    @router.get("/api/v1/demo/cases/{case_id}")
+    def get_demo_case_detail(case_id: str):
+        """Return full investigation fixture for specified demo case."""
+        case_data = get_demo_case(case_id)
+        if not case_data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Demo case '{case_id}' not found")
+        return case_data
+
+    # -----------------------------------------------------------------------
+    # Human-Auditable Inspection Views (Backward Compatible)
+    # -----------------------------------------------------------------------
+
+    @router.get("/inspect/claim/{claim_id}", response_class=HTMLResponse)
     def inspect_claim(
         claim_id: str,
         organization_id: str = Query(...),
@@ -177,7 +220,10 @@ def get_views_router(
 
         <div style="margin-top: 30px; border-top: 1px solid #e5e7eb; padding-top: 20px; display: flex; justify-content: space-between; align-items: center;">
             {trust_status_html}
-            <div style="font-size: 12px; color: #9ca3af;">SANGYAN Phase 3 Investor Safety Foundation</div>
+            <div style="font-size: 12px; color: #9ca3af;">
+                <a href="/workbench" style="color: #6366f1; text-decoration: none; margin-right: 14px;">Open Workbench &rarr;</a>
+                SANGYAN Phase 3 Investor Safety Foundation
+            </div>
         </div>
     </div>
 </body>
@@ -185,7 +231,7 @@ def get_views_router(
 """
         return HTMLResponse(content=html_content)
 
-    @router.get("/investigation/{investigation_id}", response_class=HTMLResponse)
+    @router.get("/inspect/investigation/{investigation_id}", response_class=HTMLResponse)
     def inspect_investigation(
         investigation_id: str,
         organization_id: str = Query(...),
@@ -253,7 +299,8 @@ def get_views_router(
                 <h1 style="margin: 0; font-size: 22px;">Investigation Overview</h1>
                 <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">ID: {html.escape(inv.id)} &bull; Tenant: {html.escape(organization_id)}</div>
             </div>
-            <div>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <a href="/workbench" style="color: #6366f1; text-decoration: none; font-size: 13px; font-weight: 600;">Open in Workbench &rarr;</a>
                 <span id="risk-badge" style="display: inline-block; padding: 6px 14px; border-radius: 4px; font-weight: bold; font-size: 14px; color: white; background-color: {badge_color};">
                     {html.escape(overall_status)}
                 </span>

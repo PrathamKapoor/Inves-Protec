@@ -63,6 +63,7 @@ C:\Projects\Sangyan/
 │   ├── tenancy/                # Multi-tenancy, memberships, sessions, repository
 │   ├── trust/                  # PQC receipts & verification service, key rotation
 │   ├── verification/           # Authoritative sources, snapshots, adapters, conflict resolver
+│   ├── web/                    # Landing page, Investigation Workbench, Grainient, demo fixtures
 │   └── workflow/               # LangGraph StateGraph, durable checkpointer, review gate
 ├── deploy/
 │   ├── helm/sangyan/           # Production Helm chart (Deployment, Worker, HPA, PDB)
@@ -99,7 +100,27 @@ pip install -e ".[dev]"
 ```bash
 python -m pytest tests/ -v
 ```
-All 394 tests should pass cleanly (0 failures, 0 regressions).
+All 400 tests should pass cleanly (0 failures, 0 regressions).
+
+---
+
+## Web Interfaces & Interactive Presentation
+
+SANGYAN includes zero-tooling, production-grade web interfaces served directly by FastAPI without requiring external Node.js or webpack build steps:
+
+1. **Editorial Landing Page (`GET /`)**:
+   - **Denmu Editorial Aesthetic**: Minimal, grid-based, dark charcoal (`#07090e`), off-white typography, and electric purple/indigo accents (`#7c3aed`, `#6366f1`).
+   - **Grainient Shader Canvas**: Dynamic GPU-accelerated canvas background generating smooth mathematical radial gradient drift with procedural film grain overlay, with automatic `prefers-reduced-motion` detection.
+   - **Compelling Storytelling**: The Deception Crisis, 4-Tier Authority Hierarchy, Three Core Modes (`CHECK`, `VERIFY`, `RESPOND`), 10-Stage Pipeline Stepper, and Architecture Credibility specifications.
+   - **Live Walkthrough Launchers**: Direct 1-click links to launch preloaded real-world case studies in the workbench.
+
+2. **Investigation Workbench (`GET /workbench` and `GET /app`)**:
+   - **Live Real-Time Telemetry**: Real-time Server-Sent Events (SSE) subscriber synchronizing the 10-stage pipeline stepper live.
+   - **Interactive SVG Knowledge Graph**: Force/circular layout rendering investigations, claims, entities, payment VPAs, and authoritative sources with clickable attribute inspection.
+   - **Forensic 12-Stage Scam Chain**: End-to-end criminal lifecycle visualization from initial social bait to loss realization.
+   - **TRUST-SAT Cryptographic Verification Panel**: NIST FIPS 204 ML-DSA-65 post-quantum verification panel with live interactive `[ VERIFY RECEIPT ]` validation.
+   - **Statutory Grievance Escalation**: Pre-formatted, one-click complaint drafts for SEBI SCORES 2.0 (`scores.sebi.gov.in`) and the 1930 Cybercrime Portal (`cybercrime.gov.in`), plus JSON evidentiary dossier export.
+
 
 ---
 
