@@ -335,16 +335,16 @@ Investigation Initiation / Resume
 | Investigation Post-Quantum Trust Binding | NIST ML-DSA-65 digital signing of canonical multi-content investigation dossiers | `sangyan/verification/trust_binding.py`, `sangyan/correlation/orchestrator.py` | d6694d6 | D-036 |
 | Phase 4 REST API & Migration 002 | Batch investigation API endpoints and Migration 002 tables (correlations, stages, grievances) | `sangyan/api/`, `sangyan/database/migrations.py` | d6694d6 | D-030..D-036 |
 | Phase 4 Test Suite | 21 new tests covering correlation, scam chains, guidance, grievance, explainability, PQC signing, API (total 131 tests) | `tests/test_correlation.py`, `tests/test_api.py` | d6694d6 | D-030..D-036 |
-| Migration 003 & Workflow Runs Schema | sangyan_workflow_runs table with scoped tenant indexes, retry tracking, and checkpoint pointers | `sangyan/database/migrations.py`, `tests/test_database.py` | pending | D-038 |
-| Workflow State & Models | InvestigationWorkflowState TypedDict, WorkflowRun domain model, and expanded investigation statuses | `sangyan/workflow/state.py`, `sangyan/domain/models.py` | pending | D-037 |
-| Durable SQLite Checkpointing | SqliteSaver checkpointer wrapper with tenant-scoped thread identity (org:inv:run) and crash recovery | `sangyan/workflow/checkpointer.py` | pending | D-038 |
-| Node Suite & Domain Delegation | 11 orchestration nodes delegating to intelligence, verification, correlation, guidance, explainer, trust | `sangyan/workflow/nodes.py` | pending | D-037 |
-| Human-in-the-Loop Review Gate | Durable interrupt() pause, restart recovery, resume_investigation(), first-valid-review wins, and viewer denial | `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py` | pending | D-039, D-042 |
-| Bounded Retry & Error Boundary | Exponential backoff for transient failures, audit logging, failure_node with partial evidence preservation | `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py`, `sangyan/workflow/errors.py` | pending | D-040 |
-| Cancellation & Concurrency | cancel_investigation() preserving prior evidence, per-investigation thread locks, race condition guardrails | `sangyan/workflow/service.py` | pending | D-041, D-042 |
-| PQC Trust Finalization | Post-review NIST FIPS 204 ML-DSA-65 investigation dossier signing with receipt idempotency | `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py` | pending | D-043 |
-| Workflow REST API Endpoints | /api/v1/workflow/start, /resume, /cancel, /state, /runs with full RBAC and tenant scoping | `sangyan/api/routes.py`, `sangyan/api/app.py`, `tests/test_api.py` | pending | D-037..D-043 |
-| Phase 5 Workflow Test Suite | 14 new comprehensive tests (12 workflow scenarios + 2 API lifecycle tests, total 145 tests) | `tests/test_workflow.py`, `tests/test_api.py` | pending | D-037..D-043 |
+| Migration 003 & Workflow Runs Schema | sangyan_workflow_runs table with scoped tenant indexes, retry tracking, and checkpoint pointers | `sangyan/database/migrations.py`, `tests/test_database.py` | aca648c | D-038 |
+| Workflow State & Models | InvestigationWorkflowState TypedDict, WorkflowRun domain model, and expanded investigation statuses | `sangyan/workflow/state.py`, `sangyan/domain/models.py` | aca648c | D-037 |
+| Durable SQLite Checkpointing | SqliteSaver checkpointer wrapper with tenant-scoped thread identity (org:inv:run) and crash recovery | `sangyan/workflow/checkpointer.py` | aca648c | D-038 |
+| Node Suite & Domain Delegation | 11 orchestration nodes delegating to intelligence, verification, correlation, guidance, explainer, trust | `sangyan/workflow/nodes.py` | aca648c | D-037 |
+| Human-in-the-Loop Review Gate | Durable interrupt() pause, restart recovery, resume_investigation(), first-valid-review wins, and viewer denial | `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py` | aca648c | D-039, D-042 |
+| Bounded Retry & Error Boundary | Exponential backoff for transient failures, audit logging, failure_node with partial evidence preservation | `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py`, `sangyan/workflow/errors.py` | aca648c | D-040 |
+| Cancellation & Concurrency | cancel_investigation() preserving prior evidence, per-investigation thread locks, race condition guardrails | `sangyan/workflow/service.py` | aca648c | D-041, D-042 |
+| PQC Trust Finalization | Post-review NIST FIPS 204 ML-DSA-65 investigation dossier signing with receipt idempotency | `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py` | aca648c | D-043 |
+| Workflow REST API Endpoints | /api/v1/workflow/start, /resume, /cancel, /state, /runs with full RBAC and tenant scoping | `sangyan/api/routes.py`, `sangyan/api/app.py`, `tests/test_api.py` | aca648c | D-037..D-043 |
+| Phase 5 Workflow Test Suite | 14 new comprehensive tests (12 workflow scenarios + 2 API lifecycle tests, total 145 tests) | `tests/test_workflow.py`, `tests/test_api.py` | aca648c | D-037..D-043 |
 
 
 
