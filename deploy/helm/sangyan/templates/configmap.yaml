@@ -40,3 +40,16 @@ data:
   SANGYAN_BACKUP_S3_REGION: {{ .Values.config.backupS3Region | default "ap-south-1" | quote }}
   SANGYAN_BACKUP_S3_PREFIX: {{ .Values.config.backupS3Prefix | default "backups/sangyan" | quote }}
   {{- end }}
+  {{- if .Values.config.taskQueueType }}
+  SANGYAN_TASK_QUEUE_TYPE: {{ .Values.config.taskQueueType | quote }}
+  SANGYAN_TASK_QUEUE_STREAM: {{ .Values.config.taskQueueStream | default "sangyan:tasks:stream" | quote }}
+  SANGYAN_TASK_QUEUE_GROUP: {{ .Values.config.taskQueueGroup | default "sangyan:task_workers" | quote }}
+  SANGYAN_TASK_DEAD_LETTER_STREAM: {{ .Values.config.taskDeadLetterStream | default "sangyan:tasks:dead_letter" | quote }}
+  SANGYAN_TASK_LEASE_DURATION_SEC: {{ .Values.config.taskLeaseDurationSec | default 60 | quote }}
+  {{- end }}
+  {{- if .Values.config.regionId }}
+  SANGYAN_REGION_ID: {{ .Values.config.regionId | quote }}
+  SANGYAN_DR_ROLE: {{ .Values.config.drRole | default "PRIMARY_ACTIVE" | quote }}
+  SANGYAN_DR_CLUSTER_EPOCH: {{ .Values.config.drClusterEpoch | default 1 | quote }}
+  SANGYAN_DR_FENCING_ENABLED: {{ .Values.config.drFencingEnabled | default "true" | quote }}
+  {{- end }}

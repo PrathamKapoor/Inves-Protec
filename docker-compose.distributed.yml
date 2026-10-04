@@ -128,6 +128,34 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  sangyan-worker:
+    image: sangyan:0.7.0
+    container_name: sangyan-dist-worker
+    user: "10001:10001"
+    command: ["worker", "--poll-ms", "1000", "--lease-sec", "60"]
+    environment:
+      - SANGYAN_ENV=production
+      - SANGYAN_DATABASE_URL=postgresql://sangyan:sangyan_secret_password@postgres:5432/sangyan
+      - SANGYAN_CHECKPOINT_BACKEND=postgres
+      - SANGYAN_REDIS_URL=redis://redis:6379/0
+      - SANGYAN_TASK_QUEUE_TYPE=redis_stream
+      - SANGYAN_TASK_QUEUE_STREAM=sangyan:tasks:stream
+      - SANGYAN_TASK_QUEUE_GROUP=sangyan:task_workers
+      - SANGYAN_REGION_ID=primary-south-1
+      - SANGYAN_DR_ROLE=PRIMARY_ACTIVE
+      - SANGYAN_DR_FENCING_ENABLED=true
+      - SANGYAN_KEY_DIR=/app/keys
+      - SANGYAN_LOG_LEVEL=INFO
+    volumes:
+      - sangyan-keys:/app/keys
+      - /tmp
+    depends_on:
+      sangyan-migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   sangyan-backup:
     image: sangyan:0.7.0
     container_name: sangyan-dist-backup

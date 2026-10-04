@@ -4,11 +4,18 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
 from sangyan.correlation.orchestrator import InvestigationOrchestrator
-from sangyan.core.errors import DomainValidationError, NotFoundError, PermissionDeniedError
+from sangyan.core.errors import (
+    DomainValidationError,
+    InvalidStateTransitionError,
+    NotFoundError,
+    PermissionDeniedError,
+    StaleRegionError,
+    TaskNotFoundError,
+)
 from sangyan.domain.models import Claim, ContentItem
 from sangyan.security.api_keys import generate_api_key
 from sangyan.security.auth import enforce_tenant_boundary
@@ -84,6 +91,8 @@ def get_api_router(
     workflow_service: Optional[WorkflowService] = None,
     authenticator: Optional[Callable] = None,
     metrics_registry: Optional[MetricsRegistry] = None,
+    task_queue: Optional[Any] = None,
+    dr_manager: Optional[Any] = None,
 ) -> APIRouter:
     """Build FastAPI router configured with verification engine, tenancy repository, and security boundary."""
     router = APIRouter(prefix="/api/v1", tags=["verification"])
@@ -513,6 +522,8 @@ def get_api_router(
     @router.post("/workflow/start", response_model=dict[str, Any])
     def start_workflow_investigation(
         req: WorkflowStartRequest,
+        response: Response,
+        async_exec: bool = Query(False, description="Execute asynchronously via task queue"),
         principal: Principal = Depends(_auth),
     ):
         """Initiate durable LangGraph investigation workflow across multiple content items."""
@@ -526,6 +537,41 @@ def get_api_router(
         repo = _get_repo(principal.organization_id, principal.principal_id)
         if not repo:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        if async_exec:
+            from sangyan.async_exec.models import AsyncTask, TaskStatus, TaskType
+            from sangyan.domain.base import new_id
+            task_id = new_id("tsk")
+            inv_id = new_id("inv")
+            task = AsyncTask(
+                task_id=task_id,
+                organization_id=principal.organization_id,
+                user_id=principal.principal_id,
+                investigation_id=inv_id,
+                task_type=TaskType.WORKFLOW_START,
+                status=TaskStatus.QUEUED,
+                payload={
+                    "contents": req.contents,
+                    "content_type": req.content_type,
+                    "require_review": req.require_review,
+                    "metadata": req.metadata or {},
+                },
+            )
+            try:
+                repo.save_async_task(task)
+            except StaleRegionError as e:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+            if task_queue is not None:
+                task_queue.enqueue(task)
+
+            response.status_code = status.HTTP_202_ACCEPTED
+            return {
+                "task_id": task_id,
+                "status": TaskStatus.QUEUED,
+                "investigation_id": inv_id,
+                "poll_url": f"/api/v1/tasks/{task_id}",
+            }
 
         items = [
             ContentItem(
@@ -544,6 +590,8 @@ def get_api_router(
                 metadata=req.metadata,
             )
             return state
+        except StaleRegionError as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
         except PermissionDeniedError as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
         except DomainValidationError as e:
@@ -555,6 +603,8 @@ def get_api_router(
     def resume_workflow_investigation(
         investigation_id: str,
         req: WorkflowResumeRequest,
+        response: Response,
+        async_exec: bool = Query(False, description="Resume asynchronously via task queue"),
         principal: Principal = Depends(_auth),
     ):
         """Resume an investigation paused at review_gate_node with an authorized supervisory decision."""
@@ -569,6 +619,40 @@ def get_api_router(
         if not repo:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
 
+        if async_exec:
+            from sangyan.async_exec.models import AsyncTask, TaskStatus, TaskType
+            from sangyan.domain.base import new_id
+            task_id = new_id("tsk")
+            task = AsyncTask(
+                task_id=task_id,
+                organization_id=principal.organization_id,
+                user_id=principal.principal_id,
+                investigation_id=investigation_id,
+                task_type=TaskType.WORKFLOW_RESUME,
+                status=TaskStatus.QUEUED,
+                payload={
+                    "investigation_id": investigation_id,
+                    "review_action": req.action,
+                    "reason": req.reason,
+                    "finding_id": req.finding_id,
+                },
+            )
+            try:
+                repo.save_async_task(task)
+            except StaleRegionError as e:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+            if task_queue is not None:
+                task_queue.enqueue(task)
+
+            response.status_code = status.HTTP_202_ACCEPTED
+            return {
+                "task_id": task_id,
+                "status": TaskStatus.QUEUED,
+                "investigation_id": investigation_id,
+                "poll_url": f"/api/v1/tasks/{task_id}",
+            }
+
         try:
             state = workflow_service.resume_investigation(
                 investigation_id=investigation_id,
@@ -579,6 +663,8 @@ def get_api_router(
                 finding_id=req.finding_id,
             )
             return state
+        except StaleRegionError as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
         except ReviewConflictError as e:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
         except InvestigationCancelledError as e:
@@ -678,5 +764,125 @@ def get_api_router(
 
         runs = repo.list_workflow_runs(limit=limit, offset=offset, status=status_filter)
         return [r.to_dict() for r in runs]
+
+    # -----------------------------------------------------------------------
+    # Asynchronous Task Operations & Outbox Endpoints
+    # -----------------------------------------------------------------------
+
+    @router.get("/tasks/dead-letter", response_model=list[dict[str, Any]])
+    def list_dead_letter_tasks(
+        limit: int = 50,
+        organization_id: Optional[str] = Query(None),
+        principal: Principal = Depends(_auth),
+    ):
+        """List dead-lettered async tasks for administrative inspection."""
+        if organization_id:
+            enforce_tenant_boundary(principal, organization_id, metrics)
+        if not (principal.has_permission("investigation:read") or principal.has_permission("tenant:manage")):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires investigation:read permission")
+
+        repo = _get_repo(principal.organization_id, principal.principal_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        tasks = repo.list_async_tasks(status="DEAD_LETTERED", limit=limit)
+        return [t.to_dict() for t in tasks]
+
+    @router.get("/tasks/{task_id}", response_model=dict[str, Any])
+    def get_task_status(
+        task_id: str,
+        organization_id: Optional[str] = Query(None),
+        principal: Principal = Depends(_auth),
+    ):
+        """Query async task processing state, lease, retries, and result."""
+        if organization_id:
+            enforce_tenant_boundary(principal, organization_id, metrics)
+        if not principal.has_permission("investigation:read"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires investigation:read permission")
+
+        repo = _get_repo(principal.organization_id, principal.principal_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        try:
+            task = repo.get_async_task(task_id)
+            return task.to_dict()
+        except TaskNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Task '{task_id}' not found")
+        except PermissionDeniedError as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+    @router.post("/tasks/{task_id}/retry", response_model=dict[str, Any])
+    def retry_task(
+        task_id: str,
+        principal: Principal = Depends(_auth),
+    ):
+        """Re-queue a dead-lettered async task."""
+        if not (principal.has_permission("investigation:create") or principal.has_permission("tenant:manage")):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires investigation:create permission")
+
+        repo = _get_repo(principal.organization_id, principal.principal_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        try:
+            task = repo.retry_dead_letter_task(task_id)
+            if task_queue is not None:
+                task_queue.enqueue(task)
+            return task.to_dict()
+        except TaskNotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Task '{task_id}' not found")
+        except InvalidStateTransitionError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except StaleRegionError as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
+    # -----------------------------------------------------------------------
+    # Multi-Region Disaster Recovery Endpoints
+    # -----------------------------------------------------------------------
+
+    @router.get("/dr/status", response_model=dict[str, Any])
+    def get_dr_status(
+        principal: Principal = Depends(_auth),
+    ):
+        """Retrieve multi-region disaster recovery status, active primary, and cluster epoch."""
+        if not dr_manager:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Disaster recovery manager not configured")
+        return dr_manager.get_cluster_status()
+
+    @router.post("/dr/promote", response_model=dict[str, Any])
+    def promote_dr_region(
+        region_id: str = Query(..., description="Target region ID to promote to PRIMARY_ACTIVE"),
+        reason: str = Query("", description="Promotion justification"),
+        principal: Principal = Depends(_auth),
+    ):
+        """Promote a standby region to active primary with epoch progression and fencing."""
+        if not dr_manager:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Disaster recovery manager not configured")
+        if not (principal.has_permission("tenant:manage") or "sangyan_admin" in principal.roles):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires administrative authority to promote region")
+        try:
+            rec = dr_manager.promote_region(region_id, reason=reason)
+            return rec.to_dict()
+        except NotFoundError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    @router.post("/dr/simulate", response_model=dict[str, Any])
+    def simulate_dr_failover(
+        from_region: str = Query(..., description="Currently active primary region to demote"),
+        to_region: str = Query(..., description="Standby region to promote"),
+        reason: str = Query("Simulated DR failover", description="Simulation description"),
+        principal: Principal = Depends(_auth),
+    ):
+        """Execute a controlled failover simulation and verify cryptographic audit ledger continuity."""
+        if not dr_manager:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Disaster recovery manager not configured")
+        if not (principal.has_permission("tenant:manage") or "sangyan_admin" in principal.roles):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires administrative authority to simulate failover")
+        try:
+            report = dr_manager.simulate_failover(from_region, to_region, reason=reason)
+            return report
+        except NotFoundError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
     return router

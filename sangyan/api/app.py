@@ -54,6 +54,8 @@ def create_app(
     metrics_registry: Optional[MetricsRegistry] = None,
     require_auth: bool = False,
     config: Optional[SangyanConfig] = None,
+    task_queue: Optional[Any] = None,
+    dr_manager: Optional[Any] = None,
 ) -> FastAPI:
     """Create and configure a production-ready SANGYAN FastAPI application instance with security controls."""
     # 0. Load & validate configuration
@@ -108,13 +110,52 @@ def create_app(
         trust_binding=trust_binding,
     )
 
+    # Disaster Recovery Manager
+    if dr_manager is not None:
+        dr_mgr = dr_manager
+    else:
+        from sangyan.dr.manager import DisasterRecoveryManager
+        dr_mgr = DisasterRecoveryManager(
+            engine=db_engine,
+            region_id=app_config.region_id,
+            default_role=app_config.dr_role,
+            default_epoch=app_config.dr_cluster_epoch,
+        )
+
+    # Asynchronous Task Queue setup
+    if task_queue is not None:
+        t_queue = task_queue
+    elif app_config.task_queue_type == "redis_stream" and app_config.redis_url:
+        from sangyan.async_exec.queue import RedisStreamTaskQueue
+        t_queue = RedisStreamTaskQueue(
+            redis_url=app_config.redis_url,
+            stream_name=app_config.task_queue_stream,
+            group_name=app_config.task_queue_group,
+            dead_letter_stream=app_config.task_dead_letter_stream,
+        )
+    else:
+        from sangyan.async_exec.queue import InMemoryTaskQueue
+        t_queue = InMemoryTaskQueue()
+
     def repository_factory(org_id: str, usr_id: str) -> TenantRepository:
-        return TenantRepository(db_engine, organization_id=org_id, user_id=usr_id)
+        return TenantRepository(
+            db_engine,
+            organization_id=org_id,
+            user_id=usr_id,
+            dr_manager=dr_mgr if app_config.dr_fencing_enabled else None,
+            region_id=app_config.region_id,
+        )
 
     node_suite = WorkflowNodeSuite(
         verification_engine=verif_engine,
         trust_binding=trust_binding,
-        repository_factory=lambda oid, user_id=None: TenantRepository(db_engine, organization_id=oid, user_id=user_id or "system"),
+        repository_factory=lambda oid, user_id=None: TenantRepository(
+            db_engine,
+            organization_id=oid,
+            user_id=user_id or "system",
+            dr_manager=dr_mgr if app_config.dr_fencing_enabled else None,
+            region_id=app_config.region_id,
+        ),
     )
 
     # Durable checkpointer setup (PostgresSaver in distributed mode, SqliteSaver in single-instance)
@@ -134,7 +175,13 @@ def create_app(
             wf_checkpointer = WorkflowCheckpointer(in_memory=True)
 
         wf_service = WorkflowService(
-            repository_factory=lambda oid, user_id=None: TenantRepository(db_engine, organization_id=oid, user_id=user_id or "system"),
+            repository_factory=lambda oid, user_id=None: TenantRepository(
+                db_engine,
+                organization_id=oid,
+                user_id=user_id or "system",
+                dr_manager=dr_mgr if app_config.dr_fencing_enabled else None,
+                region_id=app_config.region_id,
+            ),
             node_suite=node_suite,
             checkpointer=wf_checkpointer,
         )
@@ -170,6 +217,11 @@ def create_app(
                 wf_checkpointer.close()
             except Exception as e:
                 logger.warning("Error closing workflow checkpointer on shutdown: %s", e)
+        if t_queue is not None:
+            try:
+                t_queue.close()
+            except Exception as e:
+                logger.warning("Error closing task queue on shutdown: %s", e)
         logger.info("SANGYAN API graceful shutdown complete.")
 
     app = FastAPI(
@@ -220,6 +272,8 @@ def create_app(
         wf_service,
         authenticator=authenticator,
         metrics_registry=metrics,
+        task_queue=t_queue,
+        dr_manager=dr_mgr,
     )
     views_router = get_views_router(repository_factory, t_service)
 

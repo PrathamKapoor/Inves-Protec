@@ -75,3 +75,31 @@ class InvalidStateTransitionError(SangyanError):
     def __init__(self, message: str, code: str = "INVALID_STATE_TRANSITION", status_code: int = 409) -> None:
         super().__init__(message, code=code, status_code=status_code)
 
+
+class StaleRegionError(SangyanError):
+    """Raised when a write is attempted against a fenced, standby, or demoted DR region."""
+
+    def __init__(self, message: str, code: str = "STALE_REGION_ERROR", status_code: int = 409) -> None:
+        super().__init__(message, code=code, status_code=status_code)
+
+
+class AsyncTaskError(SangyanError):
+    """Base error for asynchronous queue and worker processing failures."""
+
+    def __init__(self, message: str, code: str = "ASYNC_TASK_ERROR", status_code: int = 500) -> None:
+        super().__init__(message, code=code, status_code=status_code)
+
+
+class TaskNotFoundError(AsyncTaskError):
+    """Raised when a requested async task does not exist."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="TASK_NOT_FOUND", status_code=404)
+
+
+class TaskLeaseExpiredError(AsyncTaskError):
+    """Raised when attempting an operation on an async task whose lease has expired or been stolen."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="TASK_LEASE_EXPIRED", status_code=409)
+

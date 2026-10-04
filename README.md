@@ -298,6 +298,45 @@ python -m sangyan.cli backup restore-cloud \
 python -m sangyan.cli health --url http://localhost:8000
 ```
 
+### 5. Asynchronous Task Worker
+```bash
+# Start an async investigation worker
+python -m sangyan.cli worker \
+  --group sangyan-workers \
+  --consumer worker-pod-1 \
+  --poll-ms 1000 \
+  --lease-sec 60 \
+  --batch-size 10
+```
+
+### 6. Asynchronous Task Management
+```bash
+# List tasks by status and tenant
+python -m sangyan.cli task list --org test-org --status RUNNING
+
+# Inspect task details and execution timeline
+python -m sangyan.cli task inspect task_12345678 --org test-org
+
+# List quarantined dead-letter tasks
+python -m sangyan.cli task dead-letter --org test-org
+
+# Re-queue a dead-letter task for retry
+python -m sangyan.cli task retry task_12345678 --org test-org
+```
+
+### 7. Multi-Region Disaster Recovery & Fencing
+```bash
+# Check regional role, authority epoch, and health
+python -m sangyan.cli dr status
+
+# Promote standby region to PRIMARY_ACTIVE (increments epoch and fences stale primary)
+python -m sangyan.cli dr promote ap-south-1 --reason "Primary region datacenter outage"
+
+# Simulate end-to-end failover drill without taking production offline
+python -m sangyan.cli dr simulate ap-south-1 eu-central-1
+```
+
+
 ---
 
 ## Operational Health & Telemetry Semantics
@@ -341,6 +380,22 @@ To perform an isolated, zero-risk disaster recovery verification:
    - Executes `PRAGMA integrity_check` on the restored database.
    - Verifies the restored schema matches the recorded migration version.
 4. Once verified, stop the API container, replace `/app/data/sangyan.db` and `/app/checkpoints/workflow_checkpoints.db` with the restored files, and restart the container.
+
+### Multi-Region Failover & Split-Brain Fencing
+In a cross-region active-passive setup (e.g., Primary: `ap-south-1`, Standby: `eu-central-1`):
+1. **Epoch Monotonicity & Fencing**: Write authority is governed by monotonic epochs recorded in `sangyan_region_fencing`. Standby or stale regions reject write requests immediately with `StaleRegionError` (`HTTP 409 Conflict`).
+2. **Failover Execution**:
+   ```bash
+   # In the secondary region, initiate promotion:
+   python -m sangyan.cli dr promote eu-central-1 --reason "Primary region failure"
+   ```
+   This atomically transitions `eu-central-1` to `PRIMARY_ACTIVE`, increments the global epoch, and fences `ap-south-1`.
+3. **Audit Ledger Continuity**: After failover, verify cryptographic SHA3-256 hash chaining remains unbroken across region boundaries:
+   ```python
+   from sangyan.dr.manager import DisasterRecoveryManager
+   dr_manager.verify_audit_continuity(tenant_repo)
+   ```
+
 
 ---
 

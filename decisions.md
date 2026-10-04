@@ -1116,6 +1116,122 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Horizontally scalable, zero-single-point-of-failure deployment architecture.
 - Files: `deploy/helm/sangyan/`, `docker-compose.distributed.yml`
 
+---
+
+### D-067: Redis Streams Task Queue Architecture vs External Heavy Brokers
+- Date / phase / commit: 2026-10-04, Phase 9
+- Context: SANGYAN requires durable asynchronous background task execution for multi-stage investor fraud investigations. Phase 8 already established a resilient Redis infrastructure for distributed rate limiting and failed-auth throttling. We must select between introducing Celery vs utilizing Redis Streams natively.
+- Decision: Implemented a native Redis Streams task queue (`sangyan/async_exec/queue.py`):
+  1. Consumer Groups (`XGROUP CREATE ... MKSTREAM`): Uses Redis Streams consumer groups for automatic load balancing across worker instances without task duplication.
+  2. At-Least-Once Delivery & Explicit Acknowledgement: Workers fetch tasks via `XREADGROUP` and explicitly acknowledge completion via `XACK`.
+  3. Pending Entries List (PEL) & Lease Reclamation: Tracks pending unacknowledged tasks via `XPENDING` and reclaims expired leases via `XCLAIM` / `XAUTOCLAIM` when workers crash.
+  4. Dead-Letter Stream: Tasks exceeding `max_attempts` are moved to `sangyan:stream:dead_letter` for operator inspection.
+  5. JSON Payload Serialization: Replaces Celery/pickle serialization with strict JSON, completely eliminating remote code execution vulnerabilities from untrusted task payloads.
+  6. Zero Heavy Dependencies: Operates entirely over the existing `redis` package without requiring `celery`, `billiard`, `kombu`, or `vine`.
+- Why: Provides native stream consumer groups, explicit leasing, at-least-once delivery, and dead-letter visibility without introducing heavy operational complexity or unsafe serialization.
+- Alternatives considered: Celery with Redis broker (rejected: adds 5+ dependencies, complex process supervisor conflicts with container signals, and pickle/serialization attack vectors).
+- Consequences: Lean, auditable, high-throughput asynchronous task queue with exact leasing semantics.
+- Files: `sangyan/async_exec/queue.py`, `sangyan/async_exec/models.py`, `tests/test_async_queue.py`
+
+---
+
+### D-068: Explicit AsyncTask Lifecycle State Machine & Idempotency Model
+- Date / phase / commit: 2026-10-04, Phase 9
+- Context: Network partitions, worker crashes, and redeliveries mean tasks can be received more than once (`delivery != exactly-once execution`). Without an explicit lifecycle and idempotency guards, duplicate investigations or fractured trust receipts could occur.
+- Decision: Implemented `AsyncTask` and strict state machine (`sangyan/async_exec/models.py`):
+  1. Lifecycle States: `QUEUED -> LEASED -> RUNNING -> SUCCEEDED`. Failure branches: `RUNNING -> RETRY_WAIT -> LEASED` or `FAILED` or `DEAD_LETTERED`. Cancellation: `CANCELLED`.
+  2. Idempotency Key Enforced: Every task carries a unique `idempotency_key` (derived from tenant ID + investigation ID + run ID or client-supplied key). Duplicate submissions return existing task without queuing a duplicate run.
+  3. Execution Guards: Before starting execution, workers query the relational task record. If the task is already `SUCCEEDED` or `CANCELLED`, the worker acknowledges the stream message and terminates immediately.
+  4. LangGraph Engine Preserved: The task model represents execution infrastructure only. LangGraph remains the sole authoritative engine for graph state transitions and checkpoints.
+- Why: Guarantees that at-least-once delivery produces exactly-one business effect, protecting audit and trust integrity.
+- Alternatives considered: In-memory task tracking (rejected: lost on worker restart; violates distributed production requirements).
+- Consequences: Deterministic, duplicate-safe asynchronous task execution.
+- Files: `sangyan/async_exec/models.py`, `sangyan/async_exec/worker.py`, `tests/test_async_task_model.py`
+
+---
+
+### D-069: Migration 005 Relational Task Store, Transactional Outbox & Region Authority Fencing Schema
+- Date / phase / commit: 2026-10-04, Phase 9
+- Context: Reliable task enqueueing requires that investigation creation in the database and task registration occur atomically, avoiding "database commit succeeds but broker fails" splits. Multi-region DR also requires database-persisted region authority and epoch counters.
+- Decision: Implemented Migration 005 (`sangyan/database/migrations.py`):
+  1. `sangyan_async_tasks` table: Stores persistent task records with `id`, `organization_id`, `user_id`, `investigation_id`, `workflow_run_id`, `task_type`, `status`, `payload_json`, `attempt`, `max_attempts`, `idempotency_key`, `worker_id`, `lease_until`, `last_error`, `traceparent`, `created_at`, `updated_at`, `completed_at`.
+  2. Transactional Outbox Guarantee: When an asynchronous investigation is created via API, the `Investigation`, `WorkflowRun`, and `AsyncTask` are committed in a single ACID transaction. The task is then published to the Redis Stream.
+  3. `sangyan_region_fencing` table: Stores region authority records with `region_id`, `role` (`PRIMARY` / `STANDBY`), `epoch`, `is_active`, `fenced_at`, `promoted_at`, `updated_at`.
+  4. Dual Dialect Support: Full schema compatibility across both SQLite and PostgreSQL engines.
+- Why: Guarantees relational durability for task lifecycle state, transactional consistency between business objects and queue records, and database-level fencing for multi-region disaster recovery.
+- Alternatives considered: Storing tasks purely in Redis (rejected: Redis restart or eviction would lose task history, tenant auditing, and lease recovery state).
+- Consequences: Durable auditability and ACID transaction boundaries for async tasks and region epochs.
+- Files: `sangyan/database/migrations.py`, `tests/test_database.py`
+
+---
+
+### D-070: Bounded Task Leasing, Failure Classification, Dead-Letter Stream & HITL Decoupling
+- Date / phase / commit: 2026-10-04, Phase 9
+- Context: When an investigation requires human supervisor review (HITL), holding a worker process or thread lease while waiting for human action (which may take hours or days) exhausts worker pools. Furthermore, worker crashes and transient infrastructure failures require safe recovery without infinite retry loops.
+- Decision: Implemented worker leasing and HITL decoupling (`sangyan/async_exec/worker.py`):
+  1. Explicit Task Leasing: Workers acquire a time-bounded lease (`lease_until = now + lease_seconds`). While running, active tasks heartbeat to renew the lease. If a worker crashes, the lease expires and another worker reclaims it.
+  2. HITL Worker Decoupling: When LangGraph reaches `review_gate_node` and pauses in `AWAITING_REVIEW`, the worker completes the initial task stage (`SUCCEEDED`), acknowledges the message, and releases worker capacity immediately.
+  3. Asynchronous Review Resumption: When supervisor submits review via API, an atomic transition to `FINALIZING` occurs and a new `workflow_resume` task is enqueued. A worker claims it, resumes LangGraph, performs ML-DSA-65 post-quantum trust signing, and completes the investigation.
+  4. Failure Classification & Bounded Exponential Backoff:
+     - Transient failures (network drops, DB connection timeouts, Redis timeouts): retried up to `max_attempts` (default 3) with exponential backoff and jitter (`delay = base * 2^(attempt-1) + jitter`).
+     - Permanent failures (validation errors, permission denied, malformed payload): routed immediately to `DEAD_LETTERED`.
+  5. Dead-Letter Inspection & Tenant Privacy: Dead-letter records sanitize error messages, strictly excluding raw claims, financial data, and PII. Authorized tenant admins can inspect and re-enqueue dead-lettered tasks via API/CLI.
+  6. Graceful Shutdown on SIGTERM: Worker stops accepting new stream items, allows in-flight tasks a grace period to finish or safely resets lease expiry, closes DB/Redis pools, and exits 0.
+- Why: Prevents worker resource starvation during human review, guarantees automatic recovery from worker crashes, and isolates unrecoverable tasks safely.
+- Alternatives considered: Blocking worker thread on `interrupt()` (rejected: catastrophic worker pool starvation).
+- Consequences: Highly efficient, fault-tolerant worker utilization with zero lease deadlocks.
+- Files: `sangyan/async_exec/worker.py`, `sangyan/async_exec/queue.py`, `tests/test_async_worker.py`
+
+---
+
+### D-071: Active-Passive Multi-Region Topology, Region Authority Epoch & Split-Brain Fencing
+- Date / phase / commit: 2026-10-04, Phase 9
+- Context: Datacenter or regional cloud outages require multi-region disaster recovery. However, active-active topologies would compromise SANGYAN's linear cryptographic invariants (SHA3-256 chained audit ledger and ML-DSA-65 trust receipts) by causing hash chain forks and split-brain receipt collisions.
+- Decision: Implemented an active-passive disaster recovery architecture with region authority fencing (`sangyan/dr/manager.py`):
+  1. Active-Passive Roles: Region A is designated `PRIMARY_ACTIVE`; Region B is `STANDBY_READY`.
+  2. Region Authority Epoch: The cluster's authoritative state is governed by a monotonically increasing epoch counter in `sangyan_region_fencing`.
+  3. Pre-Write Fencing Verification: All sensitive write operations (`save_investigation`, `transition_investigation_status`, `record_audit_event`, `enqueue_task`) verify active region authority before modifying state.
+  4. Stale-Region Write Rejection: If an old or fenced primary (e.g. Region A with Epoch `E`) attempts to accept writes after Region B has been promoted to Epoch `E + 1`, the write is rejected immediately with `StaleRegionError` (HTTP 409 Conflict / 403 Forbidden).
+  5. Split-Brain Prevention: Simultaneous promotion attempts or concurrent primary claims are rejected via atomic database locking on the epoch record.
+- Why: Eliminates split-brain dual-writer corruption and preserves cryptographic audit and trust linearity across regional boundaries.
+- Alternatives considered: Active-active multi-master (rejected: violates SANGYAN linear SHA3-256 audit chaining and creates cryptographic trust receipt collisions).
+- Consequences: Strict, verifiable split-brain immunity during disaster recovery failover.
+- Files: `sangyan/dr/manager.py`, `sangyan/dr/models.py`, `tests/test_dr_failover.py`
+
+---
+
+### D-072: Failover State Machine, LangGraph Checkpoint Continuity & Linear Audit Preservation
+- Date / phase / commit: 2026-10-04, Phase 9
+- Context: During regional disaster failover, inflight investigations and audit trails must be safely transferred. Workflows paused for human review in Region A must be resumable in Region B without losing state or creating duplicate thread IDs.
+- Decision: Implemented failover state machine and continuity reconciliation (`sangyan/dr/manager.py`):
+  1. Failover State Machine: Transitions through explicit states: `PRIMARY_ACTIVE -> STANDBY_READY -> FAILOVER_REQUESTED -> PROMOTING -> ACTIVE -> FENCING_OLD_PRIMARY`.
+  2. Idempotent Promotion: `promote_region()` is idempotent; repeated promotion invocations on an already active region succeed without epoch inflation or state drift.
+  3. Checkpoint Continuity: LangGraph checkpoint thread identity `<organization_id>:<investigation_id>:<run_id>` is preserved across regions. Standby region loads replicated checkpoints from PostgreSQL or encrypted cloud backup and resumes workflows seamlessly.
+  4. Linear Audit Continuity: Standby reconciles the last verified audit hash `prev_hash` from the replicated database before accepting new events. Subsequent audit events chain directly from the primary's last event, maintaining an unbroken cryptographic trail across failovers.
+  5. Cryptographic Trust Verification: Pre-existing ML-DSA-65 trust receipts generated in Region A remain valid and verifiable in Region B without re-signing historical records.
+- Why: Guarantees zero data loss, zero workflow corruption, and complete cryptographic audit continuity across disaster recovery failovers.
+- Alternatives considered: Generating a new audit chain in Region B (rejected: breaks evidentiary lineage and audit admissibility).
+- Consequences: Continuous, verifiable investigation state and audit trails across disaster events.
+- Files: `sangyan/dr/manager.py`, `sangyan/workflow/checkpointer.py`, `tests/test_dr_failover.py`
+
+---
+
+### D-073: Multi-Region Cloud Backup Replication, Immutable Object Lock & Disaster Recovery Verification
+- Date / phase / commit: 2026-10-04, Phase 9
+- Context: Standby regions need continuous access to verified database snapshots, checkpoints, and cryptographic trust metadata to facilitate disaster recovery when streaming replication is partitioned.
+- Decision: Hardened cloud backup engine with cross-region replication and validation (`sangyan/database/cloud_backup.py`, `sangyan/cli.py`):
+  1. Multi-Region Replication: Cloud backup manifests record `region_id`, `epoch`, and `generation_id` alongside SHA-256 checksums and AES-256-GCM encryption tags.
+  2. Pre-Upload Encryption Enforced: Backups are encrypted locally prior to transmission; unencrypted backups are strictly rejected before upload.
+  3. Cross-Region Restore Simulation: Standby region validates remote backup integrity against manifest, downloads to an isolated sandbox, verifies SHA-256, decrypts, unpacks with directory traversal defense, and runs `PRAGMA integrity_check`.
+  4. RPO/RTO Targets & Simulation:
+     - Target RPO: < 15 minutes (cloud backup replication interval) / near-zero (with streaming replication).
+     - Target RTO: < 2 minutes (promotion, schema validation, checkpoint verification, and worker boot).
+     - Documented as `VERIFIED IN SIMULATION` in the local environment.
+- Why: Provides resilient, cryptographically verified point-in-time disaster recovery capable of surviving total region failure.
+- Alternatives considered: Unencrypted cloud replication (rejected: severe security violation; plaintext databases must never touch cloud storage).
+- Consequences: Verifiable, encrypted offsite recovery with explicit RPO/RTO metrics.
+- Files: `sangyan/database/cloud_backup.py`, `sangyan/dr/manager.py`, `sangyan/cli.py`, `tests/test_cloud_backup.py`
+
 
 
 

@@ -131,6 +131,32 @@ config:
   jwtLeeway: 30
   rateLimitEnabled: "true"
   maxRequestBodyBytes: 2097152
+  taskQueueType: "redis_stream"
+  taskQueueStream: "sangyan:tasks:stream"
+  taskQueueGroup: "sangyan:task_workers"
+  taskDeadLetterStream: "sangyan:tasks:dead_letter"
+  taskLeaseDurationSec: 60
+  regionId: "primary-south-1"
+  drRole: "PRIMARY_ACTIVE"
+  drClusterEpoch: 1
+  drFencingEnabled: "true"
+
+# Asynchronous Task Worker deployment
+worker:
+  enabled: false
+  replicaCount: 2
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 80
 
 secrets:
   # Reference an existing pre-created Kubernetes Secret (Recommended for GitOps/Vault)

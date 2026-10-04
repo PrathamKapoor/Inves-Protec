@@ -1,0 +1,60 @@
+{{- if .Values.worker.enabled -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sangyan.fullname" . }}-worker
+  labels:
+    {{- include "sangyan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "sangyan.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "sangyan.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "sangyan.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}-worker
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "sangyan.cli", "worker", "--poll-ms", "1000", "--lease-sec", "60"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "sangyan.fullname" . }}-config
+            - secretRef:
+                name: {{ include "sangyan.secretName" . }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: checkpoints
+              mountPath: /app/checkpoints
+            - name: keys
+              mountPath: /app/keys
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: {{ include "sangyan.fullname" . }}-checkpoints
+        - name: keys
+          persistentVolumeClaim:
+            claimName: {{ include "sangyan.fullname" . }}-keys
+        - name: tmp
+          emptyDir: {}
+{{- end }}

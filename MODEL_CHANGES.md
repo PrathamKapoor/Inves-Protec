@@ -635,6 +635,141 @@ Located in `sangyan/database/postgres.py`, backed by `psycopg_pool.ConnectionPoo
 - `deploy/helm/sangyan/templates/networkpolicy.yaml`: Added egress on port 6379 for Redis cluster access.
 - `docker-compose.distributed.yml`: Multi-replica cluster topology with `sangyan-api-1`, `sangyan-api-2`, `sangyan-postgres`, and `sangyan-redis`.
 
+---
+
+## 12. Phase 9 Asynchronous Execution & Multi-Region Disaster Recovery Models
+
+Phase 9 elevates SANGYAN to support resilient asynchronous investigation execution via Redis Streams consumer groups, atomic lease management, Human-in-the-Loop capacity decoupling, bounded exponential backoff retries with jitter, dead-letter quarantine, and multi-region active-passive disaster recovery with epoch-based split-brain fencing and unbroken SHA3-256 audit ledger continuity.
+
+### 12.1 `AsyncTask` & State Machine (`sangyan.async_exec.models`)
+Canonical model for asynchronous work units scheduled in Redis Streams and persisted in the relational database task ledger:
+```python
+class TaskStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    DEAD_LETTER = "DEAD_LETTER"
+
+class TaskType(str, Enum):
+    INVESTIGATION_START = "INVESTIGATION_START"
+    WORKFLOW_RESUME = "WORKFLOW_RESUME"
+    BATCH_TRIAGE = "BATCH_TRIAGE"
+
+@dataclass
+class AsyncTask:
+    task_id: str
+    task_type: TaskType
+    organization_id: str
+    payload: dict[str, Any]
+    status: TaskStatus = TaskStatus.PENDING
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    leased_by: Optional[str] = None
+    lease_expires_at: Optional[float] = None
+    retry_count: int = 0
+    max_retries: int = 3
+    last_error: Optional[str] = None
+    result: Optional[dict[str, Any]] = None
+    idempotency_key: Optional[str] = None
+    stream_message_id: Optional[str] = None
+    schema_version: int = 1
+```
+
+**State Transitions Matrix (`VALID_TASK_TRANSITIONS`)**:
+- `PENDING` -> `RUNNING`
+- `RUNNING` -> `SUCCEEDED`, `FAILED`, `DEAD_LETTER`, `RUNNING` (lease heartbeat)
+- `FAILED` -> `PENDING` (retry scheduling)
+- `DEAD_LETTER` -> `PENDING` (operator manual recovery via `retry_dead_letter_task`)
+- `SUCCEEDED` -> terminal (no transitions permitted)
+
+**Exponential Backoff with Full Jitter Formula**:
+```python
+def calculate_retry_backoff(retry_count: int, base_delay: float = 2.0, max_delay: float = 60.0) -> float:
+    # Bounded exponential delay with decorrelated full jitter
+    temp = min(max_delay, base_delay * (2 ** retry_count))
+    return random.uniform(0, temp)
+```
+
+### 12.2 Human-in-the-Loop (HITL) Capacity Decoupling Semantic
+When an investigation workflow reaches `review_gate_node` and enters `status: "AWAITING_REVIEW"`:
+- The async worker **does not sleep, block, or maintain a lease**.
+- The worker finalizes the current execution step, persists the intermediate checkpoint, and marks the task as `SUCCEEDED` with `result.status = "AWAITING_REVIEW"`.
+- The task is acknowledged in Redis Streams (`xack`), releasing the worker to immediately accept new tasks from the consumer group.
+- When an analyst reviews and submits guidance (`POST /api/v1/workflow/{id}/resume?async_exec=true`), a new `WORKFLOW_RESUME` task is enqueued and executed asynchronously without tying up idle workers during human deliberation.
+
+### 12.3 Multi-Region Disaster Recovery Models (`sangyan.dr.models`)
+Canonical domain representations for cross-cloud region role coordination, epochs, and fencing states:
+```python
+class RegionRole(str, Enum):
+    PRIMARY_ACTIVE = "PRIMARY_ACTIVE"
+    STANDBY_READY = "STANDBY_READY"
+    FENCED = "FENCED"
+    DEMOTED = "DEMOTED"
+
+@dataclass
+class RegionFencingRecord:
+    region_id: str
+    role: RegionRole
+    epoch: int
+    fence_reason: Optional[str] = None
+    updated_at: float = field(default_factory=time.time)
+    schema_version: int = 1
+```
+
+### 12.4 Migration 005 Schema Expansion (`sangyan.database.migrations`)
+Migration 005 provisions `sangyan_async_tasks` (durable task repository and outbox) and `sangyan_region_fencing` (multi-region epoch authority ledger):
+```sql
+CREATE TABLE IF NOT EXISTS sangyan_async_tasks (
+    task_id TEXT PRIMARY KEY,
+    task_type TEXT NOT NULL,
+    organization_id TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    leased_by TEXT,
+    lease_expires_at REAL,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    max_retries INTEGER NOT NULL DEFAULT 3,
+    last_error TEXT,
+    result TEXT,
+    idempotency_key TEXT,
+    stream_message_id TEXT,
+    schema_version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_org_status ON sangyan_async_tasks(organization_id, status);
+CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_lease ON sangyan_async_tasks(leased_by, lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_idempotency ON sangyan_async_tasks(organization_id, idempotency_key);
+
+CREATE TABLE IF NOT EXISTS sangyan_region_fencing (
+    region_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    epoch INTEGER NOT NULL DEFAULT 0,
+    fence_reason TEXT,
+    updated_at REAL NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_sangyan_dr_role_epoch ON sangyan_region_fencing(role, epoch);
+```
+
+### 12.5 Multi-Region Active-Passive Disaster Recovery & Split-Brain Prevention
+1. **Pre-Write Fencing Check (`TenantRepository._assert_write_authority`)**:
+   - Every mutating database operation verifies local region role and epoch against the active authority.
+   - If the region is `STANDBY_READY`, `FENCED`, or `DEMOTED`, or if its epoch is behind the primary epoch, the operation is immediately aborted with `StaleRegionError` (`HTTP 409 Conflict`).
+2. **Deterministic Epoch Monotonicity**:
+   - Promotion of a standby region increments the global authority epoch (`UPDATE sangyan_region_fencing SET role='PRIMARY_ACTIVE', epoch=epoch+1`).
+   - The previously primary region is fenced (`role='FENCED'`), preventing zombie write races.
+3. **Audit Ledger Linear Continuity**:
+   - SHA3-256 cryptographic hash chaining is preserved continuously across regional failovers without forks.
+   - `DisasterRecoveryManager.verify_audit_continuity()` verifies that the child record's `parent_event_hash` precisely equals the parent's `event_hash` across all failover boundaries.
+
+### 12.6 Worker Container Packaging & Manifests
+- `deploy/helm/sangyan/templates/deployment-worker.yaml`: Dedicated asynchronous worker Deployment running non-root `10001:10001` with `readOnlyRootFilesystem: true` and `command: ["python", "-m", "sangyan.cli", "worker"]`.
+- `deploy/helm/sangyan/templates/hpa-worker.yaml`: HorizontalPodAutoscaler scaling worker pods (1-10 replicas) based on CPU utilization and queue depth.
+- `docker-compose.distributed.yml`: `sangyan-worker` service running alongside distributed API pods, PostgreSQL, and Redis.
+
+
 
 
 

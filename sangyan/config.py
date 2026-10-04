@@ -80,6 +80,24 @@ class SangyanConfig:
     otel_exporter_endpoint: Optional[str] = None
     trace_sample_rate: float = 1.0
 
+    # Asynchronous Execution & Task Queue (Phase 9)
+    task_queue_type: str = "redis_stream"  # redis_stream | in_memory
+    task_queue_stream: str = "sangyan:tasks:stream"
+    task_queue_group: str = "sangyan:task_workers"
+    task_lease_duration_sec: float = 60.0
+    task_max_retries: int = 3
+    task_dead_letter_stream: str = "sangyan:tasks:dead_letter"
+    worker_concurrency: int = 4
+
+    # Multi-Region Disaster Recovery & Split-Brain Fencing (Phase 9)
+    region_id: str = "primary-south-1"
+    dr_cluster_epoch: int = 1
+    dr_role: str = "PRIMARY_ACTIVE"  # PRIMARY_ACTIVE | STANDBY_READY | DEMOTED | FENCED
+    dr_fencing_enabled: bool = True
+    secondary_database_url: Optional[str] = None
+    secondary_backup_s3_bucket: Optional[str] = None
+    secondary_backup_s3_region: Optional[str] = None
+
     # Server execution
     host: str = "0.0.0.0"
     port: int = 8000
@@ -132,6 +150,12 @@ class SangyanConfig:
             "backup_dir": self.backup_dir,
             "backup_encryption_configured": bool(self.backup_encryption_key),
             "backup_retention_count": self.backup_retention_count,
+            "task_queue_type": self.task_queue_type,
+            "region_id": self.region_id,
+            "dr_role": self.dr_role,
+            "dr_cluster_epoch": self.dr_cluster_epoch,
+            "dr_fencing_enabled": self.dr_fencing_enabled,
+            "secondary_database_url": self._sanitize_db_url(self.secondary_database_url) if self.secondary_database_url else None,
             "host": self.host,
             "port": self.port,
             "log_level": self.log_level,
@@ -197,6 +221,39 @@ def load_config(env_source: Optional[Mapping[str, str]] = None) -> SangyanConfig
     except ValueError:
         trace_sample_rate = 1.0
 
+    # Phase 9 Async & Multi-Region DR configs
+    task_queue_type = env.get("SANGYAN_TASK_QUEUE_TYPE", "redis_stream")
+    task_queue_stream = env.get("SANGYAN_TASK_QUEUE_STREAM", "sangyan:tasks:stream")
+    task_queue_group = env.get("SANGYAN_TASK_QUEUE_GROUP", "sangyan:task_workers")
+    raw_lease_sec = env.get("SANGYAN_TASK_LEASE_DURATION_SEC", "60.0")
+    try:
+        task_lease_sec = float(raw_lease_sec)
+    except ValueError:
+        task_lease_sec = 60.0
+
+    raw_max_retries = env.get("SANGYAN_TASK_MAX_RETRIES", "3")
+    try:
+        task_max_retries = int(raw_max_retries)
+    except ValueError:
+        task_max_retries = 3
+
+    task_dl_stream = env.get("SANGYAN_TASK_DEAD_LETTER_STREAM", "sangyan:tasks:dead_letter")
+    raw_concurrency = env.get("SANGYAN_WORKER_CONCURRENCY", "4")
+    try:
+        worker_concurrency = int(raw_concurrency)
+    except ValueError:
+        worker_concurrency = 4
+
+    region_id = env.get("SANGYAN_REGION_ID", "primary-south-1")
+    raw_epoch = env.get("SANGYAN_DR_CLUSTER_EPOCH", "1")
+    try:
+        dr_cluster_epoch = int(raw_epoch)
+    except ValueError:
+        dr_cluster_epoch = 1
+
+    dr_role = env.get("SANGYAN_DR_ROLE", "PRIMARY_ACTIVE")
+    dr_fencing_enabled = _str_to_bool(env.get("SANGYAN_DR_FENCING_ENABLED"), default=True)
+
     cfg = SangyanConfig(
         env=raw_env,
         database_url=db_url,
@@ -229,6 +286,20 @@ def load_config(env_source: Optional[Mapping[str, str]] = None) -> SangyanConfig
         tracing_enabled=_str_to_bool(env.get("SANGYAN_TRACING_ENABLED"), default=False),
         otel_exporter_endpoint=env.get("SANGYAN_OTEL_EXPORTER_ENDPOINT"),
         trace_sample_rate=trace_sample_rate,
+        task_queue_type=task_queue_type,
+        task_queue_stream=task_queue_stream,
+        task_queue_group=task_queue_group,
+        task_lease_duration_sec=task_lease_sec,
+        task_max_retries=task_max_retries,
+        task_dead_letter_stream=task_dl_stream,
+        worker_concurrency=worker_concurrency,
+        region_id=region_id,
+        dr_cluster_epoch=dr_cluster_epoch,
+        dr_role=dr_role,
+        dr_fencing_enabled=dr_fencing_enabled,
+        secondary_database_url=env.get("SANGYAN_SECONDARY_DATABASE_URL"),
+        secondary_backup_s3_bucket=env.get("SANGYAN_SECONDARY_BACKUP_S3_BUCKET"),
+        secondary_backup_s3_region=env.get("SANGYAN_SECONDARY_BACKUP_S3_REGION"),
         host=env.get("SANGYAN_HOST", "0.0.0.0"),
         port=port,
         log_level=env.get("SANGYAN_LOG_LEVEL", "INFO").upper(),

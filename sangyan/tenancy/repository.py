@@ -72,12 +72,23 @@ class TenantAdministration:
 class TenantRepository:
     """Repository scoped strictly to a single tenant organization and authenticated user."""
 
-    def __init__(self, engine: DatabaseEngine, organization_id: str, user_id: str) -> None:
+    def __init__(
+        self,
+        engine: DatabaseEngine,
+        organization_id: str,
+        user_id: str,
+        dr_manager: Optional[Any] = None,
+        region_id: Optional[str] = None,
+    ) -> None:
         if not organization_id or not user_id:
             raise PermissionDeniedError("organization_id and user_id are required")
         self._db = engine
         self.organization_id = organization_id
         self.user_id = user_id
+        self._dr_manager = dr_manager
+        self._region_id = region_id
+        from sangyan.async_exec.repository import AsyncTaskRepository
+        self._task_repo = AsyncTaskRepository(engine)
         self._role = self._resolve_role()
 
     def _resolve_role(self) -> str:
@@ -91,9 +102,15 @@ class TenantRepository:
             )
         return row["role"]
 
-    def _require_permission(self, permission: str) -> None:
+    def _require_permission(self, permission: str, write: bool = False) -> None:
         if not has_permission(self._role, permission):
             raise PermissionDeniedError(f"role '{self._role}' lacks required permission: {permission}")
+        if write:
+            self._assert_write_authority()
+
+    def _assert_write_authority(self) -> None:
+        if self._dr_manager is not None:
+            self._dr_manager.verify_write_authority(self._region_id)
 
     # -----------------------------------------------------------------------
     # Content Items
@@ -101,6 +118,7 @@ class TenantRepository:
 
     def save_content_item(self, item: ContentItem) -> str:
         self._require_permission("investigation:create")
+        self._assert_write_authority()
         if item.organization_id != self.organization_id:
             raise PermissionDeniedError("content item tenant does not match active organization")
         problems = item.validate()
@@ -158,7 +176,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_claim(self, claim: Claim) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         problems = claim.validate()
         if problems:
             raise DomainValidationError(f"invalid claim: {problems}", errors=problems)
@@ -238,7 +256,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_signal(self, sig: Signal) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         problems = sig.validate()
         if problems:
             raise DomainValidationError(f"invalid signal: {problems}", errors=problems)
@@ -313,7 +331,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_finding(self, finding: Finding) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         problems = finding.validate()
         if problems:
             raise DomainValidationError(f"invalid finding: {problems}", errors=problems)
@@ -404,7 +422,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_entity(self, entity: Entity) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         problems = entity.validate()
         if problems:
             raise DomainValidationError(f"invalid entity: {problems}", errors=problems)
@@ -471,7 +489,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_source(self, source: Source) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         problems = source.validate()
         if problems:
             raise DomainValidationError(f"invalid source: {problems}", errors=problems)
@@ -544,7 +562,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_evidence(self, evidence: Evidence) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         problems = evidence.validate()
         if problems:
             raise DomainValidationError(f"invalid evidence: {problems}", errors=problems)
@@ -630,7 +648,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_guidance(self, guidance: ActionGuidance) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         problems = guidance.validate()
         if problems:
             raise DomainValidationError(f"invalid guidance: {problems}", errors=problems)
@@ -703,7 +721,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_investigation(self, inv: Investigation) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         if inv.organization_id != self.organization_id:
             raise PermissionDeniedError("investigation tenant does not match active organization")
         problems = inv.validate()
@@ -823,7 +841,7 @@ class TenantRepository:
         entity_ids: list[str] | None = None,
         guidance_ids: list[str] | None = None,
     ) -> None:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         inv = self.get_investigation(inv_id)
         new_status = status or inv.status
         new_summary = summary if summary is not None else inv.summary
@@ -871,7 +889,7 @@ class TenantRepository:
         Returns True if the transition succeeded (1 row updated), False if the investigation was
         not in from_status or belonged to a different tenant.
         """
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         now = time.time()
         completed_clause = ", completed_at = ?" if to_status in ("COMPLETED", "FAILED", "CANCELLED") else ""
         summary_clause = ", summary = ?" if summary is not None else ""
@@ -896,7 +914,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def record_review(self, rev: Review) -> str:
-        self._require_permission("investigation:review")
+        self._require_permission("investigation:review", write=True)
         # Verify investigation belongs to this tenant
         self.get_investigation(rev.investigation_id)
         problems = rev.validate()
@@ -959,7 +977,7 @@ class TenantRepository:
         metadata: dict | None = None,
     ) -> str:
         """Record a tamper-evident audit event with SHA3-256 chained ledger hashing."""
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         now = time.time()
         audit_id = new_id("audit")
         event_id = f"evt_{int(now * 1000)}_{audit_id[-8:]}"
@@ -1038,7 +1056,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_correlation(self, edge: CorrelationEdge) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         if edge.organization_id != self.organization_id:
             raise PermissionDeniedError("correlation tenant does not match active organization")
         problems = edge.validate()
@@ -1144,7 +1162,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_scam_chain_stage(self, stage: InvestigationStage) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         if stage.organization_id != self.organization_id:
             raise PermissionDeniedError("stage tenant does not match active organization")
         problems = stage.validate()
@@ -1200,7 +1218,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_grievance_record(self, record: GrievanceRecord) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         if record.organization_id != self.organization_id:
             raise PermissionDeniedError("grievance record tenant does not match active organization")
         problems = record.validate()
@@ -1254,7 +1272,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_workflow_run(self, run: WorkflowRun) -> str:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         if run.organization_id != self.organization_id:
             raise PermissionDeniedError("workflow run tenant does not match active organization")
         problems = run.validate()
@@ -1364,7 +1382,7 @@ class TenantRepository:
         error_message: str | None = None,
         metadata: dict | None = None,
     ) -> None:
-        self._require_permission("investigation:create")
+        self._require_permission("investigation:create", write=True)
         run = self.get_workflow_run(run_id)
         new_status = status or run.status
         new_node = current_node or run.current_node
@@ -1437,7 +1455,7 @@ class TenantRepository:
     # -----------------------------------------------------------------------
 
     def save_api_key(self, api_key: ApiKey) -> str:
-        self._require_permission("api_key:manage")
+        self._require_permission("api_key:manage", write=True)
         if api_key.organization_id != self.organization_id:
             raise PermissionDeniedError("api key tenant does not match active organization")
         self._db.execute(
@@ -1543,7 +1561,7 @@ class TenantRepository:
         ]
 
     def revoke_api_key(self, key_id: str) -> ApiKey:
-        self._require_permission("api_key:manage")
+        self._require_permission("api_key:manage", write=True)
         key = self.get_api_key(key_id)
         if key.revoked_at is None:
             now = time.time()
@@ -1559,6 +1577,42 @@ class TenantRepository:
             "UPDATE sangyan_api_keys SET last_used_at=? WHERE id=? AND organization_id=?",
             (timestamp, key_id, self.organization_id),
         )
+
+    # -----------------------------------------------------------------------
+    # Asynchronous Tasks (Tenant-Scoped Outbox)
+    # -----------------------------------------------------------------------
+
+    def save_async_task(self, task: Any) -> str:
+        self._require_permission("investigation:create", write=True)
+        if task.organization_id != self.organization_id:
+            raise PermissionDeniedError("task tenant does not match active organization")
+        return self._task_repo.save_task(task)
+
+    def get_async_task(self, task_id: str) -> Any:
+        self._require_permission("investigation:read")
+        return self._task_repo.get_task(task_id, organization_id=self.organization_id)
+
+    def list_async_tasks(
+        self,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[Any]:
+        self._require_permission("investigation:read")
+        return self._task_repo.list_tasks(
+            organization_id=self.organization_id,
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+
+    def retry_dead_letter_task(self, task_id: str) -> Any:
+        self._require_permission("investigation:create", write=True)
+        return self._task_repo.retry_dead_letter_task(task_id, organization_id=self.organization_id)
+
+    def cancel_async_task(self, task_id: str, reason: str = "") -> Any:
+        self._require_permission("investigation:create", write=True)
+        return self._task_repo.cancel_task(task_id, organization_id=self.organization_id, reason=reason)
 
 
 

@@ -378,11 +378,55 @@ MIGRATION_004_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_sangyan_api_keys_org ON sangyan_api_keys(organization_id)",
 )
 
+MIGRATION_005_STATEMENTS: tuple[str, ...] = (
+    # Asynchronous Tasks (Task ledger & outbox)
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_async_tasks (
+        task_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        task_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'QUEUED',
+        payload TEXT NOT NULL DEFAULT '{}',
+        result TEXT,
+        error_message TEXT,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        max_retries INTEGER NOT NULL DEFAULT 3,
+        lease_owner TEXT,
+        lease_expires_at REAL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL,
+        completed_at REAL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_org ON sangyan_async_tasks(organization_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_status ON sangyan_async_tasks(status)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_inv ON sangyan_async_tasks(investigation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_lease ON sangyan_async_tasks(lease_owner, lease_expires_at)",
+    # Disaster Recovery Region Epoch & Fencing
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_region_fencing (
+        region_id TEXT PRIMARY KEY,
+        cluster_epoch INTEGER NOT NULL DEFAULT 1,
+        role TEXT NOT NULL DEFAULT 'STANDBY_READY',
+        is_fenced INTEGER NOT NULL DEFAULT 0,
+        fence_reason TEXT,
+        last_heartbeat_at REAL NOT NULL,
+        promoted_at REAL,
+        updated_at REAL NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_fencing_role ON sangyan_region_fencing(role)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_fencing_epoch ON sangyan_region_fencing(cluster_epoch)",
+)
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_sangyan_core_tables", MIGRATION_001_STATEMENTS),
     Migration(2, "create_sangyan_correlation_and_guidance_tables", MIGRATION_002_STATEMENTS),
     Migration(3, "create_sangyan_workflow_runs_table", MIGRATION_003_STATEMENTS),
     Migration(4, "create_sangyan_api_keys_table", MIGRATION_004_STATEMENTS),
+    Migration(5, "create_sangyan_async_tasks_and_dr_tables", MIGRATION_005_STATEMENTS),
 )
 
 

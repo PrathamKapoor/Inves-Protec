@@ -319,5 +319,308 @@ def health_cmd(url: str):
             click.echo(f"{ep:<15} [{click.style('ERR', fg='red')}] {e}")
 
 
+@cli.command("worker")
+@click.option("--worker-id", default=None, help="Explicit unique identifier for this worker instance")
+@click.option("--concurrency", default=None, type=int, help="Thread concurrency (default: from config or 4)")
+@click.option("--lease-sec", default=None, type=float, help="Task lease duration in seconds (default: 60.0)")
+@click.option("--poll-ms", default=1000, type=int, help="Queue polling interval in milliseconds")
+def worker_cmd(worker_id: Optional[str], concurrency: Optional[int], lease_sec: Optional[float], poll_ms: int):
+    """Run asynchronous investigation worker consuming from Redis Streams with bounded leases."""
+    config = load_config()
+    validate_production_config(config)
+
+    configure_logging(level=config.log_level)
+    logger.info("Initializing SANGYAN async task worker in env=%s...", config.env)
+
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+
+    from sangyan.dr.manager import DisasterRecoveryManager
+    dr_mgr = DisasterRecoveryManager(
+        engine=engine,
+        region_id=config.region_id,
+        default_role=config.dr_role,
+        default_epoch=config.dr_cluster_epoch,
+    )
+
+    from sangyan.tenancy.repository import TenantRepository
+    def repo_factory(oid: str, user_id=None):
+        return TenantRepository(
+            engine,
+            organization_id=oid,
+            user_id=user_id or "system",
+            dr_manager=dr_mgr if config.dr_fencing_enabled else None,
+            region_id=config.region_id,
+        )
+
+    from sangyan.trust.service import TrustService
+    from sangyan.verification.sources import AuthoritativeSourceRegistry
+    from sangyan.verification.snapshots import SnapshotManager
+    from sangyan.verification.trust_binding import TrustBindingService
+    from sangyan.verification.engine import ClaimVerificationEngine
+    from sangyan.verification.cache import VerificationCache, RateLimiter
+    from sangyan.workflow.nodes import WorkflowNodeSuite
+    from sangyan.workflow.checkpointer import WorkflowCheckpointer
+    from sangyan.workflow.service import WorkflowService
+
+    t_service = TrustService(engine, key_dir=config.key_dir)
+    trust_binding = TrustBindingService(t_service)
+    src_reg = AuthoritativeSourceRegistry()
+    snap_mgr = SnapshotManager()
+
+    verif_engine = ClaimVerificationEngine(
+        source_registry=src_reg,
+        snapshot_manager=snap_mgr,
+        trust_binding=trust_binding,
+        cache=VerificationCache(),
+        rate_limiter=RateLimiter(),
+    )
+
+    node_suite = WorkflowNodeSuite(
+        verification_engine=verif_engine,
+        trust_binding=trust_binding,
+        repository_factory=repo_factory,
+    )
+
+    if (
+        config.checkpoint_backend == "postgres"
+        and config.database_url
+        and config.database_url.startswith(("postgresql://", "postgres://"))
+    ):
+        wf_cp = WorkflowCheckpointer(postgres_url=config.database_url)
+    elif config.checkpoint_db_path:
+        wf_cp = WorkflowCheckpointer(db_path=config.checkpoint_db_path)
+    else:
+        wf_cp = WorkflowCheckpointer(in_memory=True)
+
+    wf_service = WorkflowService(
+        repository_factory=repo_factory,
+        node_suite=node_suite,
+        checkpointer=wf_cp,
+    )
+
+    from sangyan.async_exec.models import AsyncTask
+    from sangyan.async_exec.queue import InMemoryTaskQueue, RedisStreamTaskQueue
+    from sangyan.async_exec.repository import AsyncTaskRepository
+    from sangyan.async_exec.worker import AsyncInvestigationWorker
+
+    task_repo = AsyncTaskRepository(engine)
+
+    if config.task_queue_type == "redis_stream" and config.redis_url:
+        queue = RedisStreamTaskQueue(
+            redis_url=config.redis_url,
+            stream_name=config.task_queue_stream,
+            group_name=config.task_queue_group,
+            dead_letter_stream=config.task_dead_letter_stream,
+        )
+    else:
+        queue = InMemoryTaskQueue()
+
+    lease_duration = lease_sec or config.task_lease_duration_sec
+    worker = AsyncInvestigationWorker(
+        queue=queue,
+        repository=task_repo,
+        workflow_service=wf_service,
+        worker_id=worker_id,
+        lease_duration_sec=lease_duration,
+    )
+
+    click.echo(click.style(f"Worker {worker.worker_id} started (lease={lease_duration}s, region={config.region_id})...", fg="green"))
+    try:
+        worker.run_forever(poll_interval_ms=poll_ms)
+    finally:
+        queue.close()
+        engine.close()
+        wf_cp.close()
+
+
+@cli.group("dr")
+def dr_group():
+    """Multi-region disaster recovery, region authority, and split-brain fencing commands."""
+    pass
+
+
+@dr_group.command("status")
+def dr_status():
+    """Display active primary, cluster epoch, and region fencing status."""
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+    from sangyan.dr.manager import DisasterRecoveryManager
+    mgr = DisasterRecoveryManager(engine=engine, region_id=config.region_id, default_role=config.dr_role, default_epoch=config.dr_cluster_epoch)
+    status_data = mgr.get_cluster_status()
+
+    click.echo(click.style("SANGYAN Multi-Region DR Status:", fg="cyan", bold=True))
+    click.echo(f"  Local Region:    {status_data['local_region']}")
+    click.echo(f"  Active Primary:  {status_data['active_primary']}")
+    click.echo(f"  Cluster Epoch:   {status_data['current_epoch']}")
+    click.echo("\nRegistered Regions:")
+    for r in status_data["regions"]:
+        fenced_str = click.style("[FENCED]", fg="red") if r["is_fenced"] else click.style("[ACTIVE/READY]", fg="green")
+        click.echo(f"  - {r['region_id']:<20} Role: {r['role']:<15} Epoch: {r['cluster_epoch']} {fenced_str}")
+        if r.get("fence_reason"):
+            click.echo(f"      Fence reason: {r['fence_reason']}")
+
+
+@dr_group.command("promote")
+@click.argument("region_id")
+@click.option("--reason", default="", help="Promotion justification")
+def dr_promote(region_id: str, reason: str):
+    """Promote a standby region to active primary with epoch progression and fencing."""
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+    from sangyan.dr.manager import DisasterRecoveryManager
+    mgr = DisasterRecoveryManager(engine=engine, region_id=config.region_id, default_role=config.dr_role, default_epoch=config.dr_cluster_epoch)
+    try:
+        res = mgr.promote_region(region_id, reason=reason)
+        click.echo(click.style(f"Region '{region_id}' successfully promoted to PRIMARY_ACTIVE (epoch {res.cluster_epoch})", fg="green"))
+    except Exception as e:
+        click.echo(click.style(f"Promotion failed: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+
+@dr_group.command("simulate")
+@click.argument("from_region")
+@click.argument("to_region")
+@click.option("--reason", default="Simulated failover via CLI", help="Simulation reason")
+def dr_simulate(from_region: str, to_region: str, reason: str):
+    """Simulate a controlled DR failover and verify cryptographic audit ledger continuity."""
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+    from sangyan.dr.manager import DisasterRecoveryManager
+    mgr = DisasterRecoveryManager(engine=engine, region_id=config.region_id, default_role=config.dr_role, default_epoch=config.dr_cluster_epoch)
+    try:
+        report = mgr.simulate_failover(from_region, to_region, reason=reason)
+        click.echo(click.style("Disaster Recovery Failover Simulation: SUCCESS", fg="green", bold=True))
+        click.echo(f"  Demoted Source:      {report['from_region']['region_id']} ({report['from_region']['role']})")
+        click.echo(f"  Promoted Target:     {report['to_region']['region_id']} ({report['to_region']['role']}, Epoch {report['epoch']})")
+        click.echo(f"  Duration:            {report['duration_seconds']}s")
+        click.echo(f"  Audit Hash Chain:    {'VALID' if report['audit_continuity']['valid'] else 'BROKEN'} ({report['audit_continuity']['event_count']} events)")
+    except Exception as e:
+        click.echo(click.style(f"Simulation failed: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+
+@cli.group("task")
+def task_group():
+    """Asynchronous task queue inspection, dead-letter management, and retry commands."""
+    pass
+
+
+@task_group.command("list")
+@click.option("--status", default=None, help="Filter by task status (QUEUED, RUNNING, SUCCEEDED, DEAD_LETTERED, etc.)")
+@click.option("--org", default=None, help="Filter by organization ID")
+@click.option("--limit", default=20, type=int, help="Max tasks to display")
+def task_list(status: Optional[str], org: Optional[str], limit: int):
+    """List asynchronous tasks from relational outbox ledger."""
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+    from sangyan.async_exec.repository import AsyncTaskRepository
+    repo = AsyncTaskRepository(engine)
+    tasks = repo.list_tasks(organization_id=org, status=status, limit=limit)
+    if not tasks:
+        click.echo(click.style("No tasks found matching criteria.", fg="cyan"))
+        return
+
+    click.echo(f"{'TASK ID':<24} {'TYPE':<18} {'STATUS':<15} {'RETRIES':<8} {'INVESTIGATION ID'}")
+    click.echo("-" * 80)
+    for t in tasks:
+        st_color = "green" if t.status == "SUCCEEDED" else ("red" if t.status == "DEAD_LETTERED" else "yellow")
+        click.echo(f"{t.task_id:<24} {t.task_type:<18} {click.style(t.status, fg=st_color):<24} {t.retry_count:<8} {t.investigation_id}")
+
+
+@task_group.command("inspect")
+@click.argument("task_id")
+def task_inspect(task_id: str):
+    """Inspect detailed state, payload, result, and lease information for a task."""
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+    from sangyan.async_exec.repository import AsyncTaskRepository
+    repo = AsyncTaskRepository(engine)
+    task = repo.get_task_or_none(task_id)
+    if not task:
+        click.echo(click.style(f"Task '{task_id}' not found.", fg="red"), err=True)
+        sys.exit(1)
+
+    click.echo(click.style(f"Task Details: {task.task_id}", fg="cyan", bold=True))
+    click.echo(f"  Organization:  {task.organization_id}")
+    click.echo(f"  User:          {task.user_id}")
+    click.echo(f"  Investigation: {task.investigation_id}")
+    click.echo(f"  Type:          {task.task_type}")
+    click.echo(f"  Status:        {task.status}")
+    click.echo(f"  Retries:       {task.retry_count}/{task.max_retries}")
+    click.echo(f"  Lease Owner:   {task.lease_owner or 'None'}")
+    click.echo(f"  Lease Expires: {task.lease_expires_at or 'None'}")
+    click.echo(f"  Created At:    {task.created_at}")
+    click.echo(f"  Completed At:  {task.completed_at or 'None'}")
+    if task.error_message:
+        click.echo(click.style(f"  Error:         {task.error_message}", fg="red"))
+    if task.result:
+        click.echo(f"  Result:        {json.dumps(task.result, indent=2)}")
+
+
+@task_group.command("dead-letter")
+@click.option("--limit", default=20, type=int, help="Max dead-lettered tasks to list")
+def task_dead_letter(limit: int):
+    """List dead-lettered tasks that exhausted retries or suffered fatal errors."""
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+    from sangyan.async_exec.repository import AsyncTaskRepository
+    repo = AsyncTaskRepository(engine)
+    tasks = repo.list_dead_letter(limit=limit)
+    if not tasks:
+        click.echo(click.style("Zero dead-lettered tasks found. Queue is clean.", fg="green"))
+        return
+
+    click.echo(click.style(f"Dead-Lettered Tasks ({len(tasks)}):", fg="red", bold=True))
+    for t in tasks:
+        click.echo(f"  - {t.task_id:<24} Type: {t.task_type:<16} Failed at attempt {t.retry_count}: {t.error_message}")
+
+
+@task_group.command("retry")
+@click.argument("task_id")
+def task_retry(task_id: str):
+    """Re-queue a dead-lettered task for processing."""
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+    from sangyan.async_exec.repository import AsyncTaskRepository
+    from sangyan.async_exec.queue import InMemoryTaskQueue, RedisStreamTaskQueue
+    repo = AsyncTaskRepository(engine)
+
+    if config.task_queue_type == "redis_stream" and config.redis_url:
+        queue = RedisStreamTaskQueue(
+            redis_url=config.redis_url,
+            stream_name=config.task_queue_stream,
+            group_name=config.task_queue_group,
+            dead_letter_stream=config.task_dead_letter_stream,
+        )
+    else:
+        queue = InMemoryTaskQueue()
+
+    try:
+        task = repo.retry_dead_letter_task(task_id)
+        queue.enqueue(task)
+        click.echo(click.style(f"Task '{task_id}' successfully re-queued to status QUEUED.", fg="green"))
+    except Exception as e:
+        click.echo(click.style(f"Retry failed: {e}", fg="red"), err=True)
+        sys.exit(1)
+    finally:
+        queue.close()
+
+
 if __name__ == "__main__":
     cli()
