@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sangyan.fullname" . }}-config
+  labels:
+    {{- include "sangyan.labels" . | nindent 4 }}
+data:
+  SANGYAN_ENV: {{ .Values.config.env | quote }}
+  SANGYAN_HOST: "0.0.0.0"
+  SANGYAN_PORT: "8000"
+  SANGYAN_DATABASE_URL: {{ .Values.config.databaseUrl | quote }}
+  SANGYAN_CHECKPOINT_DB_PATH: {{ .Values.config.checkpointDbPath | quote }}
+  SANGYAN_KEY_DIR: {{ .Values.config.keyDir | quote }}
+  SANGYAN_BACKUP_DIR: {{ .Values.config.backupDir | quote }}
+  SANGYAN_ALLOWED_ORIGINS: {{ .Values.config.allowedOrigins | quote }}
+  SANGYAN_LOG_LEVEL: {{ .Values.config.logLevel | quote }}
+  SANGYAN_JWT_ALGORITHMS: {{ .Values.config.jwtAlgorithms | quote }}
+  SANGYAN_JWT_ISSUER: {{ .Values.config.jwtIssuer | quote }}
+  SANGYAN_JWT_AUDIENCE: {{ .Values.config.jwtAudience | quote }}
+  SANGYAN_JWT_LEEWAY: {{ .Values.config.jwtLeeway | quote }}
+  SANGYAN_REQUIRE_AUTH: "true"
+  SANGYAN_RATE_LIMIT_ENABLED: {{ .Values.config.rateLimitEnabled | quote }}
+  SANGYAN_MAX_REQUEST_BODY_BYTES: {{ .Values.config.maxRequestBodyBytes | quote }}
+  SANGYAN_AUTO_MIGRATE: "false"  # Managed exclusively via migration hook Job

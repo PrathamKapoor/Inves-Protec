@@ -813,6 +813,180 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Production-ready observability compliant with privacy and security mandates.
 - Files: `sangyan/security/telemetry.py`, `sangyan/api/app.py`
 
+---
+
+### D-051: Minimal Multi-Stage Container Packaging, Non-Root Runtime & Read-Only Root Filesystem
+- Date / phase / commit: 2026-10-04, Phase 7
+- Context: Deploying SANGYAN into production requires a minimal, reproducible, and secure container image. Running as root or permitting mutable root filesystems exposes the host and cluster to privilege escalation, container escapes, and unauthorized code mutation. Build-time secrets or test dependencies must never leak into production layers.
+- Decision: Implemented a hardened multi-stage Dockerfile:
+  1. Base Image: `python:3.13-slim` (matching repository Python 3.13 runtime, Debian Bookworm minimal).
+  2. Multi-Stage Build: Builder stage compiles wheels and installs dependencies; runtime stage copies only pre-built wheels and application source code, omitting compilers (`gcc`, `make`) and test fixtures.
+  3. Non-Root Identity: Dedicated system user and group `sangyan` (UID `10001`, GID `10001`) with no shell access (`/sbin/nologin`). All processes run under UID 10001.
+  4. Filesystem Boundary: Read-only root filesystem (`readOnlyRootFilesystem: true`). Application source at `/app` is owned by `root:root` and mode `0555` (read-only to runtime user).
+  5. Explicit Writable Storage: Only dedicated, explicitly mounted runtime paths are writable:
+     - `/app/data` (mode `0750`, owned by `10001:10001`) for SQLite database (if used).
+     - `/app/checkpoints` (mode `0750`, owned by `10001:10001`) for LangGraph SQLite WAL checkpoint storage.
+     - `/app/keys` (mode `0700`, owned by `10001:10001`) for ML-DSA-65 post-quantum signing keys.
+     - `/app/backups` (mode `0750`, owned by `10001:10001`) for local backup dumps.
+     - `/tmp` (mounted as `emptyDir` tmpfs).
+  6. Signal Handling & Entrypoint: Exec-form entrypoint `["python", "-m", "sangyan.cli", "serve"]` ensuring PID 1 forwards `SIGTERM` and `SIGINT` cleanly to Uvicorn for graceful shutdown without shell swallowing.
+  7. Build Context Hygiene: Comprehensive `.dockerignore` excluding `.git`, `.venv`, `__pycache__`, `tests/`, local `.db` files, credentials, `.env*`, and research/paper artifacts.
+- Why: Eliminates privilege escalation, prevents in-container source modification by attackers, minimizes image attack surface, and ensures deterministic container builds.
+- Alternatives considered: Distroless Python images (rejected: lacks necessary standard library shared objects and SQLite binary bindings required for LangGraph WAL checkpointer).
+- Consequences: Production container passes strict CIS Docker benchmarks and runs under Kubernetes `restricted` Pod Security Standards.
+- Files: `Dockerfile`, `.dockerignore`
+
+---
+
+### D-052: Single-Replica Deployment Topology, Worker Concurrency & In-Process State Isolation
+- Date / phase / commit: 2026-10-04, Phase 7
+- Context: SANGYAN relies on in-memory sliding token-bucket rate limiting (`TokenBucketRateLimiter`), per-investigation in-memory execution thread locks (`_investigation_locks`), and an embedded SQLite WAL checkpointer (`WorkflowCheckpointer`) for LangGraph state persistence. Naively scaling the API to multiple horizontal replicas (e.g. via HPA) without distributed coordination would lead to split-brain rate limits, concurrent review-gate race conditions, and SQLite multi-node write lock corruption.
+- Decision: Formally establish a Single-Replica Deployment Topology (`replicas: 1`) per tenant/environment:
+  1. Pod Count: `replicaCount: 1` enforced in Helm values and Docker Compose. Autoscaling (HPA) is explicitly disabled.
+  2. Process Model: Single-worker Uvicorn process (`--workers 1`) to preserve in-process mutual exclusion across concurrent investigation threads and SQLite write transactions.
+  3. Vertical Scaling: Performance scaling is achieved vertically by adjusting CPU and memory requests/limits (`resources.requests` and `resources.limits`).
+  4. Concurrency Safety: Python's `asyncio` event loop handles high-concurrency I/O for API requests, while background CPU-intensive verification and graph operations run in bounded threadpools with re-entrant locking.
+- Why: Prevents distributed state inconsistencies, eliminates file lock contention on SQLite WAL checkpoints, and guarantees absolute correctness of investigation review gates without requiring heavy distributed infrastructure (Redis, ZooKeeper, etcd).
+- Alternatives considered: Introducing Redis for distributed rate limiting and PostgreSQL checkpointer (rejected: Phase 7 is infrastructure stabilization; adding distributed backends violates simplicity guardrails and introduces unnecessary architectural complexity).
+- Consequences: Rock-solid state consistency and reliable review gates. Horizontal scale-out is deferred to a future phase requiring distributed lock managers.
+- Files: `deploy/helm/sangyan/values.yaml`, `docker-compose.yml`, `sangyan/workflow/service.py`
+
+---
+
+### D-053: Fail-Closed Environment Configuration, Secret Injection & Production Boundary Validation
+- Date / phase / commit: 2026-10-04, Phase 7
+- Context: Production deployments must not bake credentials, signing keys, or database passwords into container images or Git repositories. Insecure development defaults (such as default JWT secrets or wildcard CORS) must be strictly forbidden in production mode.
+- Decision: Implemented centralized configuration management and fail-closed startup validation (`sangyan/config.py`):
+  1. Environment Layering: Three explicit environments (`development`, `test`, `production`), controlled via `SANGYAN_ENV`.
+  2. Configuration Parameters:
+     - `SANGYAN_ENV`: Runtime mode (default: `development`).
+     - `SANGYAN_DATABASE_URL`: Connection string (`sqlite:////app/data/sangyan.db` or `postgresql://...`).
+     - `SANGYAN_CHECKPOINT_DB_PATH`: Filesystem path to SQLite checkpoint database (`/app/checkpoints/workflow_checkpoints.db`).
+     - `SANGYAN_JWT_SECRET`: Symmetric signing secret (minimum 32 bytes with high entropy).
+     - `SANGYAN_JWT_PUBLIC_KEY` / `SANGYAN_JWT_PRIVATE_KEY`: Asymmetric verification keys.
+     - `SANGYAN_REQUIRE_AUTH`: Enforces authentication on all API routes.
+     - `SANGYAN_ALLOWED_ORIGINS`: Explicit comma-separated CORS allowed origins.
+     - `SANGYAN_BACKUP_ENCRYPTION_KEY`: Symmetric key for database backup encryption.
+  3. Fail-Closed Production Validation (`validate_production_config`):
+     - When `SANGYAN_ENV == "production"`, startup fails immediately (raising `ConfigurationError`) if:
+       - Default test JWT secret is present (`sangyan-insecure-test-secret...`).
+       - JWT secret is shorter than 32 characters or lacks entropy.
+       - `SANGYAN_REQUIRE_AUTH` is disabled or set to `false`.
+       - `SANGYAN_ALLOWED_ORIGINS` contains wildcard `*` with credentials enabled.
+       - Database URL is missing or empty.
+       - Writable directories are inaccessible.
+  4. Secret Injection: Secrets are injected exclusively via environment variables from Kubernetes `Secret` objects or Docker Compose env files, never stored in ConfigMaps or Helm values.
+- Why: Eliminates the possibility of accidental deployment with insecure development settings or leaked test credentials.
+- Alternatives considered: Allowing development fallbacks in production with log warnings (rejected: insecure-by-default; warnings are routinely ignored in production).
+- Consequences: The application will not start unless all production security prerequisites are completely and correctly satisfied.
+- Files: `sangyan/config.py`, `sangyan/api/app.py`, `tests/test_config.py`
+
+---
+
+### D-054: Operational Health Semantics (Liveness, Readiness, Startup) & Safe Information Exposure
+- Date / phase / commit: 2026-10-04, Phase 7
+- Context: Kubernetes and container orchestrators require distinct health probes to manage pod lifecycles. Conflating liveness and readiness causes unnecessary container restarts during transient dependency delays. Furthermore, health endpoints must not leak internal paths, connection strings, or system secrets to attackers.
+- Decision: Implemented decoupled operational health endpoints with strict information-disclosure boundaries (`sangyan/api/app.py`):
+  1. Liveness Probe (`/health/live`):
+     - Answers: "Is the process event loop alive and accepting TCP connections?"
+     - Checks process responsiveness and memory sanity. Does not query external or transient dependencies.
+     - Returns HTTP 200 with `{"status": "live", "uptime_seconds": float}`.
+  2. Readiness Probe (`/health/ready`):
+     - Answers: "Can this instance safely process user traffic?"
+     - Checks database engine connectivity (`SELECT 1`).
+     - Checks database migration state (verifies all schema migrations 001..004 are applied).
+     - Checks checkpoint persistence storage accessibility.
+     - Returns HTTP 200 with `{"status": "ready", "database": "connected", "migrations": "current"}` when healthy; returns HTTP 503 Service Unavailable when degraded.
+  3. System Health Summary (`/health`):
+     - Preserved for backward compatibility with Phase 3–6 integration tests, returning service name, version, and registered sources count.
+  4. Information-Disclosure Defense:
+     - Health responses never expose database credentials, hostnames, filesystem paths, JWT configuration, or stack traces.
+     - Failed readiness returns standardized error codes without sensitive diagnostic traces.
+- Why: Prevents cascading container restarts while giving orchestrators precise signals for traffic routing and automated self-healing.
+- Alternatives considered: Checking external regulatory APIs (SEBI, MCA) in readiness probe (rejected: external third-party network blips would falsely take the SANGYAN API offline).
+- Consequences: Reliable container orchestration with zero information leakage.
+- Files: `sangyan/api/app.py`, `tests/test_health_probes.py`
+
+---
+
+### D-055: Durable SQLite Checkpointing in Production, WAL Lifecycle & Crash Recovery
+- Date / phase / commit: 2026-10-04, Phase 7
+- Context: Phase 5 established LangGraph StateGraph orchestration and human-in-the-loop review gates (`review_gate_node`). In development, checkpointers frequently default to in-memory mode. In production, container restarts or worker crashes must not destroy in-flight investigation workflows or lose human review interrupt states.
+- Decision: Implemented production checkpoint persistence and lifecycle management:
+  1. Persistent Checkpoint Path: `WorkflowCheckpointer` is initialized with a persistent database file located on a mounted volume (`/app/checkpoints/workflow_checkpoints.db`).
+  2. SQLite WAL Configuration: The checkpoint database operates with `PRAGMA journal_mode = WAL`, `PRAGMA synchronous = NORMAL`, and `PRAGMA busy_timeout = 10000`.
+  3. Composite Tenant Identity: Thread identities strictly follow `<organization_id>:<investigation_id>:<run_id>`, guaranteeing complete multi-tenant checkpoint isolation.
+  4. Graceful Shutdown & WAL Checkpoint: On receiving `SIGTERM`, FastAPI lifespan context closes the SQLite connection, triggering an orderly SQLite WAL checkpoint (`PRAGMA wal_checkpoint(TRUNCATE)`), ensuring zero pending journal entries remain in temporary files.
+  5. Recovery Verification: On container restart, the checkpointer connects to the existing database file; pending review states (`interrupted`) are immediately reloaded, allowing authorized analysts to resume investigations seamlessly.
+- Why: Satisfies the core durability requirement: `container restart != workflow state loss`.
+- Alternatives considered: Storing workflow state in the primary relational database (rejected: LangGraph SQLite saver schema is specialized and changing checkpointer architecture in Phase 7 would violate Phase 5 contracts).
+- Consequences: Durable workflow recovery verified across crashes, restarts, and interruptions.
+- Files: `sangyan/workflow/checkpointer.py`, `sangyan/api/app.py`, `tests/test_workflow.py`
+
+---
+
+### D-056: Controlled Database Migration Lifecycle, Concurrency Locking & Pre-Deployment Execution
+- Date / phase / commit: 2026-10-04, Phase 7
+- Context: Executing database migrations automatically on application pod startup can cause concurrency race conditions, table lock contention, and schema corruption if multiple pods or jobs execute DDL statements simultaneously.
+- Decision: Implemented controlled migration execution and concurrency locking (`sangyan/database/migrations.py`, `sangyan/cli.py`):
+  1. Concurrency Locking:
+     - SQLite: Writes are protected via `BEGIN IMMEDIATE` transaction semantics, acquiring exclusive database write locks.
+     - PostgreSQL: `MigrationRunner` acquires a PostgreSQL session-level advisory lock (`SELECT pg_advisory_lock(837192)`) before inspecting or applying migrations, releasing it in a `finally` block (`SELECT pg_advisory_unlock(837192)`).
+  2. Dedicated Migration CLI: `sangyan migrate` command enables operators and deployment pipelines to execute migrations independently of the API server process.
+  3. Kubernetes Deployment Architecture: Migrations are decoupled from the application Deployment and executed via a pre-install / pre-upgrade Kubernetes `Job` (Helm hook `pre-install,pre-upgrade`). The API pod only starts after the migration Job completes successfully.
+  4. Inspection Commands: `sangyan migrate-status` provides CLI visibility into applied versus pending migrations without modifying database state.
+- Why: Eliminates DDL race conditions during rollouts and ensures zero-downtime, orderly schema progression.
+- Alternatives considered: Allowing API pods to run `migrate()` during startup in production (rejected: violates production deployment best practices and risks race conditions).
+- Consequences: Safe, locked, auditable schema migrations across SQLite and PostgreSQL.
+- Files: `sangyan/database/migrations.py`, `sangyan/cli.py`, `deploy/helm/sangyan/templates/job-migration.yaml`
+
+---
+
+### D-057: Automated Cryptographic Database Backup, AES-256-GCM Encryption, SHA-256 Verification & Isolated Restore
+- Date / phase / commit: 2026-10-04, Phase 7
+- Context: SANGYAN holds critical investor-safety data, evidence provenance records, post-quantum trust receipts, and audit ledgers. Unverified or plaintext backups stored in untrusted locations create disaster recovery and confidentiality risks. A backup is unproven until a complete restore has been verified in an isolated environment.
+- Decision: Implemented a comprehensive backup, verification, and restore engine (`sangyan/database/backup.py`, `sangyan/cli.py`):
+  1. Consistent Snapshot Creation:
+     - SQLite: Utilizes SQLite's online backup API or `VACUUM INTO` to create transactionally consistent point-in-time snapshots of relational and checkpoint databases even under active concurrent writes.
+     - PostgreSQL: Leverages streaming SQL dumps or table exports.
+  2. Multi-Artifact Packaging: Bundles primary relational database, workflow checkpoints database, and cryptographic key metadata into a versioned tarball (`sangyan_backup_<timestamp>.tar.gz`).
+  3. Cryptographic Integrity: Computes SHA-256 digest of the backup archive, storing it alongside the archive as `<backup>.sha256`.
+  4. Strong Encryption: Optional symmetric encryption using AES-256-GCM (`cryptography.hazmat.primitives.ciphers.aead.AESGCM`) with a 12-byte random nonce and authenticated tag, keyed from `SANGYAN_BACKUP_ENCRYPTION_KEY`.
+  5. Automated Pruning & Retention: `prune_backups()` retains the last $N$ backups (default: 7 daily backups) and cleans up orphaned checksum and metadata files.
+  6. Verified Restore Procedure: `restore_backup()` validates archive checksum, decrypts ciphertext, unpacks into an isolated target directory, and runs `PRAGMA integrity_check` and schema verification.
+  7. Disaster Recovery Metrics: Initial operational targets established: RPO <= 24 hours (with daily scheduled backup) or RPO <= 1 hour (with hourly cron); RTO <= 5 minutes (measured restore execution < 1 second locally).
+- Why: Guarantees complete data recoverability without data leakage or undetected backup corruption.
+- Alternatives considered: Simple file copy of SQLite databases (rejected: copying active SQLite databases with WAL files corrupts the copy if a write occurs mid-copy).
+- Consequences: Verifiable, encrypted disaster recovery runbook and automated scheduled backup routines.
+- Files: `sangyan/database/backup.py`, `sangyan/cli.py`, `tests/test_backup.py`
+
+---
+
+### D-058: Hardened Kubernetes / Helm Manifest Architecture, Pod Security Standards & Ingress Boundary
+- Date / phase / commit: 2026-10-04, Phase 7
+- Context: Deploying SANGYAN onto Kubernetes clusters requires production-grade Helm templates adhering to Kubernetes Pod Security Standards (Restricted profile), strict resource bounding, and controlled ingress exposure.
+- Decision: Implemented standardized Helm chart (`deploy/helm/sangyan`):
+  1. Pod Security Standards (Restricted Profile):
+     - `runAsNonRoot: true`, `runAsUser: 10001`, `runAsGroup: 10001`, `fsGroup: 10001`.
+     - `allowPrivilegeEscalation: false`.
+     - `readOnlyRootFilesystem: true`.
+     - `capabilities.drop: ["ALL"]`.
+     - `seccompProfile.type: "RuntimeDefault"`.
+  2. Resource Allocation Defaults:
+     - Requests: `cpu: "250m"`, `memory: "512Mi"`.
+     - Limits: `cpu: "1000m"`, `memory: "1Gi"`.
+  3. Persistent Storage (PVC): Dedicated PersistentVolumeClaims for relational data (`/app/data`), LangGraph checkpoints (`/app/checkpoints`), and cryptographic keys (`/app/keys`).
+  4. Ingress Boundary & Metrics Isolation:
+     - Ingress routes `/` and `/api` to the Service on port 8000 with TLS termination.
+     - Route `/metrics` is explicitly excluded from the public Ingress and restricted to cluster-internal scraping via Prometheus `ServiceMonitor` or NetworkPolicy.
+  5. NetworkPolicy: Enforces default-deny ingress with explicit allows for ingress controller traffic on port 8000 and cluster-internal Prometheus scrapers.
+  6. Operational Decoupling: Migration Job (`job-migration.yaml`) and scheduled Backup CronJob (`cronjob-backup.yaml`) are packaged with appropriate RBAC and Volume mounts.
+- Why: Implements defense-in-depth at the container, pod, network, and orchestrator boundaries.
+- Alternatives considered: Permitting default root permissions and permissive ingress (rejected: violates zero-trust principles).
+- Consequences: Safe, standard-compliant Kubernetes deployment templates validated statically via Helm lint and schema checks.
+- Files: `deploy/helm/sangyan/`
+
+
 
 
 

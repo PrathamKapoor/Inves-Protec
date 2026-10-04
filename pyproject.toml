@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sangyan"
-version = "0.1.0"
+version = "0.7.0"
 description = "SANGYAN: Investor Safety & Content Intelligence Platform"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,6 +28,10 @@ dependencies = [
     "click>=8.1",
     "httpx>=0.27",
     "pyyaml>=6.0",
+    "pyjwt>=2.8.0",
+    "prometheus-client>=0.20.0",
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +46,7 @@ postgres = [
 
 [project.scripts]
 sangyan = "sangyan.cli:cli"
+
 
 [tool.setuptools.packages.find]
 include = ["sangyan*"]

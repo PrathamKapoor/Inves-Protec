@@ -1,0 +1,102 @@
+# SANGYAN Production-Coherent Docker Compose Topology
+# Single-replica API, pre-migration runner, automated backup routine, and persistent volumes.
+# Non-root user (10001:10001), healthchecks, explicit lifecycle management.
+
+services:
+  sangyan-migration:
+    image: sangyan:0.7.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sangyan-migration
+    user: "10001:10001"
+    command: ["migrate"]
+    environment:
+      - SANGYAN_ENV=${SANGYAN_ENV:-production}
+      - SANGYAN_DATABASE_URL=${SANGYAN_DATABASE_URL:-sqlite:////app/data/sangyan.db}
+    volumes:
+      - sangyan-data:/app/data
+    restart: "no"
+
+  sangyan-api:
+    image: sangyan:0.7.0
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sangyan-api
+    user: "10001:10001"
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    ports:
+      - "${SANGYAN_PORT:-8000}:8000"
+    environment:
+      - SANGYAN_ENV=${SANGYAN_ENV:-production}
+      - SANGYAN_DATABASE_URL=${SANGYAN_DATABASE_URL:-sqlite:////app/data/sangyan.db}
+      - SANGYAN_CHECKPOINT_DB_PATH=/app/checkpoints/workflow_checkpoints.db
+      - SANGYAN_KEY_DIR=/app/keys
+      - SANGYAN_BACKUP_DIR=/app/backups
+      - SANGYAN_JWT_SECRET=${SANGYAN_JWT_SECRET}
+      - SANGYAN_JWT_ALGORITHMS=${SANGYAN_JWT_ALGORITHMS:-HS256}
+      - SANGYAN_JWT_ISSUER=${SANGYAN_JWT_ISSUER:-sangyan-auth}
+      - SANGYAN_JWT_AUDIENCE=${SANGYAN_JWT_AUDIENCE:-sangyan-api}
+      - SANGYAN_REQUIRE_AUTH=${SANGYAN_REQUIRE_AUTH:-true}
+      - SANGYAN_ALLOWED_ORIGINS=${SANGYAN_ALLOWED_ORIGINS:-https://sangyan.local}
+      - SANGYAN_LOG_LEVEL=${SANGYAN_LOG_LEVEL:-INFO}
+      - SANGYAN_RATE_LIMIT_ENABLED=${SANGYAN_RATE_LIMIT_ENABLED:-true}
+      - SANGYAN_AUTO_MIGRATE=false  # Handled cleanly by sangyan-migration job
+    volumes:
+      - sangyan-data:/app/data
+      - sangyan-checkpoints:/app/checkpoints
+      - sangyan-keys:/app/keys
+      - sangyan-backups:/app/backups
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      sangyan-migration:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  sangyan-backup:
+    image: sangyan:0.7.0
+    container_name: sangyan-backup
+    user: "10001:10001"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "Starting SANGYAN automated backup scheduler (interval: 86400s)..."
+        while true; do
+          echo "[`date -u`] Executing scheduled backup..."
+          python -m sangyan.cli backup create --encrypt --output-dir /app/backups || echo "Backup failed!"
+          python -m sangyan.cli backup prune --backup-dir /app/backups --keep 7 || echo "Pruning failed!"
+          sleep 86400
+        done
+    environment:
+      - SANGYAN_ENV=${SANGYAN_ENV:-production}
+      - SANGYAN_DATABASE_URL=${SANGYAN_DATABASE_URL:-sqlite:////app/data/sangyan.db}
+      - SANGYAN_CHECKPOINT_DB_PATH=/app/checkpoints/workflow_checkpoints.db
+      - SANGYAN_KEY_DIR=/app/keys
+      - SANGYAN_BACKUP_DIR=/app/backups
+      - SANGYAN_BACKUP_ENCRYPTION_KEY=${SANGYAN_BACKUP_ENCRYPTION_KEY}
+    volumes:
+      - sangyan-data:/app/data:ro
+      - sangyan-checkpoints:/app/checkpoints:ro
+      - sangyan-keys:/app/keys:ro
+      - sangyan-backups:/app/backups
+    depends_on:
+      sangyan-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sangyan-data:
+    name: sangyan-data
+  sangyan-checkpoints:
+    name: sangyan-checkpoints
+  sangyan-keys:
+    name: sangyan-keys
+  sangyan-backups:
+    name: sangyan-backups

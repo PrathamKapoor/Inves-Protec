@@ -477,6 +477,109 @@ CREATE INDEX IF NOT EXISTS idx_sangyan_api_keys_org ON sangyan_api_keys(organiza
 7. **Transport Security & Bounds**: Emits defensive headers (`nosniff`, `DENY`, `strict-origin-when-cross-origin`, `CSP`, `Cache-Control: no-store` on API routes), limits body payloads to 2 MB (HTTP 413), and correlates requests via `X-Request-ID`.
 8. **Low-Cardinality Prometheus Observability**: Routes are normalized to route templates (`/api/v1/investigations/{id}`) to prevent label explosion. Logs and traces automatically scrub JWT tokens, API keys, private keys, passwords, and OTPs via `redact_sensitive_text`.
 
+---
+
+## 10. Phase 7 Deployment, Configuration & Backup Models
+
+### 10.1 `SangyanConfig` (`sangyan.config`)
+Unified production configuration model loading environment variables with strict fail-closed validation:
+```python
+@dataclass
+class SangyanConfig:
+    # Environment
+    environment: str = "production"     # production | staging | development | test
+    debug: bool = False
+
+    # Database & Storage
+    database_url: str = "sqlite:////app/data/sangyan.db"
+    database_pool_size: int = 5
+    database_timeout_seconds: float = 30.0
+    checkpoint_db_path: str = "/app/checkpoints/workflow_checkpoints.db"
+    backup_dir: str = "/app/backups"
+    keys_dir: str = "/app/keys"
+
+    # Server Runtime
+    host: str = "0.0.0.0"
+    port: int = 8000
+    workers: int = 1                    # Strictly 1 in production (single-replica invariant)
+    log_level: str = "INFO"
+
+    # Security & Auth
+    jwt_secret: str = ""
+    jwt_issuer: str = "sangyan-auth"
+    jwt_audience: str = "sangyan-api"
+    jwt_algorithms: list[str] = field(default_factory=lambda: ["HS256"])
+    auth_required: bool = True
+    allowed_origins: list[str] = field(default_factory=lambda: [])
+    max_request_body_bytes: int = 2 * 1024 * 1024
+    rate_limit_enabled: bool = True
+
+    # Backup & Retention
+    backup_encryption_password: Optional[str] = None
+    backup_retention_days: int = 30
+
+    def validate_production(self, strict: bool = True) -> list[str]: ...
+```
+
+**Production Validation Invariants (`validate_production_config`)**:
+- **Secret Entropy**: `jwt_secret` must have >= 32 characters (256-bit equivalent).
+- **Insecure Secret Rejection**: Known placeholder secrets (`sangyan-dev-secret`, `sangyan-default-secret`, `secret`, `changeme`, `password`) raise immediate validation failure.
+- **CORS Boundary**: `allowed_origins` must NOT contain wildcard `*` in production mode.
+- **Mandatory Authentication**: `auth_required` cannot be set to `False` in production.
+- **Worker Bound**: If SQLite is used as primary or checkpoint DB, `workers` must equal 1.
+
+### 10.2 `BackupMetadata` (`sangyan.database.backup`)
+Tamper-evident metadata document generated with each backup snapshot and stored inside `backup_manifest.json`:
+```python
+@dataclass
+class BackupMetadata:
+    backup_id: str                      # Format: sangyan_bkp_YYYYMMDD_HHMMSS_ffffff_XXXXXX
+    timestamp: str                      # ISO-8601 UTC timestamp
+    schema_version: int                 # Active database schema migration version
+    checksum_sha256: str                # SHA-256 digest of unencrypted payload
+    file_size_bytes: int                # Size in bytes of final archive
+    is_encrypted: bool                  # True if AES-256-GCM encrypted
+    encryption_algorithm: Optional[str] # "AES-256-GCM" or None
+    kdf_algorithm: Optional[str]        # "PBKDF2-HMAC-SHA256" (100,000 iterations)
+    kdf_iterations: int = 100000
+    files_included: list[str] = field(default_factory=list)
+    sangyan_version: str = "0.7.0"
+
+    def to_dict(self) -> dict: ...
+    @classmethod
+    def from_dict(cls, data: dict) -> "BackupMetadata": ...
+```
+
+**Cryptographic Archive Packaging Format (`.enc` container)**:
+```text
++-------------------------------------------------------------------------+
+| Header (8 bytes): MAGIC 'SGYBKP1\0'                                     |
++-------------------------------------------------------------------------+
+| Salt (16 bytes): PBKDF2 cryptographic salt                              |
++-------------------------------------------------------------------------+
+| Nonce (12 bytes): AES-256-GCM initialization vector                     |
++-------------------------------------------------------------------------+
+| Tag (16 bytes): GCM authentication tag                                  |
++-------------------------------------------------------------------------+
+| Ciphertext (variable length): Tarball payload (.tar.gz)                 |
++-------------------------------------------------------------------------+
+```
+
+### 10.3 Helm Values Schema Contract (`deploy/helm/sangyan/values.yaml`)
+Formally specified in `deploy/helm/sangyan/values.schema.json`:
+- `replicaCount`: Integer enum `[1]`. Disallows scaling beyond 1 due to SQLite single-writer semantics and in-process rate limiting.
+- `podSecurityContext`: `runAsNonRoot: true`, `runAsUser: 10001`, `runAsGroup: 10001`, `fsGroup: 10001`, `seccompProfile.type: RuntimeDefault`.
+- `securityContext`: `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, `capabilities.drop: ["ALL"]`.
+- `persistence`: ReadWriteOnce PVC specifications for `data` (10Gi), `checkpoints` (5Gi), `keys` (1Gi), and `backups` (50Gi).
+- `probes`:
+  * `livenessProbe`: `httpGet.path: /health/live`, `port: http`, `periodSeconds: 15`.
+  * `readinessProbe`: `httpGet.path: /health/ready`, `port: http`, `periodSeconds: 10`.
+  * `startupProbe`: `httpGet.path: /health`, `port: http`, `failureThreshold: 30`, `periodSeconds: 2`.
+- `backup`: `enabled: true`, `schedule: "0 2 * * *"`, `retentionDays: 30`, `existingSecret: "sangyan-secrets"`.
+- `ingress`: TLS enabled, annotations for 2 MB max body size, and location configuration blocking `/metrics` (returns 404).
+- `networkPolicy`: `enabled: true`, strictly permits ingress from ingress-controller & Prometheus scraper; limits egress to DNS (53), HTTPS (443), and optional Postgres (5432).
+
+
 
 
 

@@ -1,0 +1,83 @@
+{{- if .Values.backupCron.enabled -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "sangyan.fullname" . }}-backup
+  labels:
+    {{- include "sangyan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backupCron.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.backupCron.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backupCron.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "sangyan.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          serviceAccountName: {{ include "sangyan.serviceAccountName" . }}
+          restartPolicy: OnFailure
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: backup
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                - "sh"
+                - "-c"
+                - |
+                  echo "[`date -u`] Starting automated backup routine..."
+                  python -m sangyan.cli backup create --encrypt --output-dir /app/backups
+                  echo "[`date -u`] Pruning backups older than retention limit..."
+                  python -m sangyan.cli backup prune --backup-dir /app/backups --keep {{ .Values.backupCron.retentionCount }}
+                  echo "[`date -u`] Backup routine finished successfully."
+              envFrom:
+                - configMapRef:
+                    name: {{ include "sangyan.fullname" . }}-config
+                - secretRef:
+                    name: {{ include "sangyan.secretName" . }}
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              volumeMounts:
+                - name: data
+                  mountPath: /app/data
+                  readOnly: true
+                - name: checkpoints
+                  mountPath: /app/checkpoints
+                  readOnly: true
+                - name: keys
+                  mountPath: /app/keys
+                  readOnly: true
+                - name: backups
+                  mountPath: /app/backups
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: {{ include "sangyan.fullname" . }}-data
+            - name: checkpoints
+              persistentVolumeClaim:
+                claimName: {{ include "sangyan.fullname" . }}-checkpoints
+            - name: keys
+              persistentVolumeClaim:
+                claimName: {{ include "sangyan.fullname" . }}-keys
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ include "sangyan.fullname" . }}-backups
+            - name: tmp
+              emptyDir: {}
+{{- end }}

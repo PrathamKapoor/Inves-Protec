@@ -1,0 +1,71 @@
+{{- if .Values.persistence.data.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sangyan.fullname" . }}-data
+  labels:
+    {{- include "sangyan.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.data.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.data.size }}
+  {{- if .Values.persistence.data.storageClassName }}
+  storageClassName: {{ .Values.persistence.data.storageClassName }}
+  {{- end }}
+{{- end }}
+{{- if .Values.persistence.checkpoints.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sangyan.fullname" . }}-checkpoints
+  labels:
+    {{- include "sangyan.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.checkpoints.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.checkpoints.size }}
+  {{- if .Values.persistence.checkpoints.storageClassName }}
+  storageClassName: {{ .Values.persistence.checkpoints.storageClassName }}
+  {{- end }}
+{{- end }}
+{{- if .Values.persistence.keys.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sangyan.fullname" . }}-keys
+  labels:
+    {{- include "sangyan.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.keys.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.keys.size }}
+  {{- if .Values.persistence.keys.storageClassName }}
+  storageClassName: {{ .Values.persistence.keys.storageClassName }}
+  {{- end }}
+{{- end }}
+{{- if .Values.persistence.backups.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sangyan.fullname" . }}-backups
+  labels:
+    {{- include "sangyan.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.backups.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.backups.size }}
+  {{- if .Values.persistence.backups.storageClassName }}
+  storageClassName: {{ .Values.persistence.backups.storageClassName }}
+  {{- end }}
+{{- end }}

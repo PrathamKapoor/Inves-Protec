@@ -354,6 +354,116 @@ Phase 6 hardens SANGYAN for production operation by establishing an external aut
 
 ---
 
+## 11. Production Runtime Architecture, Deployment Rollout & Disaster Recovery Flow
+
+```text
++====================================================================================================+
+|                    SANGYAN PRODUCTION RUNTIME ARCHITECTURE & TOPOLOGY                             |
++====================================================================================================+
+
+              [Internet / Client Requests]
+                           │
+                           ▼
+            [Kubernetes Ingress (TLS Termination)]
+            - Strict TLS (TLS 1.3 / 1.2 modern ciphers)
+            - 2 MB client_max_body_size
+            - Location /metrics -> 404 Not Found (Internal Cluster-Only)
+            - Location / -> Forward to sangyan-api ClusterIP Service (8000)
+                           │
+                           ▼
+           [NetworkPolicy & Pod Security Context Boundary]
+            - Ingress allowed only from ingress controller & Prometheus scraper
+            - Egress restricted to DNS (53), HTTPS (443), and DB (5432 if PostgreSQL)
+            - Pod Security: non-root UID 10001 (sangyan), drop ALL capabilities
+            - Read-only root filesystem (readOnlyRootFilesystem: true)
+            - Dedicated writable volumes: /app/data, /app/checkpoints, /app/keys, /tmp
+                           │
+                           ▼
+              [Single-Replica SANGYAN API Pod (replicas: 1)]
+            - Container Entrypoint: python -m sangyan.cli serve
+            - Async Lifespan Startup:
+                1. load_config() & validate_production_config(strict=True)
+                2. Initialize DatabaseEngine (/app/data/sangyan.db, WAL mode)
+                3. Verify pending_migrations() == 0 (Fail fast if unapplied)
+                4. Initialize SqliteSaver checkpointer (/app/checkpoints/workflow_checkpoints.db)
+                5. Mark app.state.is_ready = True
+            - Uvicorn Single-Worker (1 process) to guarantee:
+                * In-memory token bucket rate limiter coherence
+                * Investigation thread-locking without distributed lock manager
+                * SQLite WAL single-writer safety
+
+                           │
+          ┌────────────────┴────────────────┐
+          ▼                                 ▼
+[Automated Pre-Rollout Hook]      [Daily Scheduled Backup CronJob]
+- Job: sangyan-migration         - CronJob: sangyan-backup (0 2 * * *)
+- Command: python -m sangyan.cli migrate - Command: python -m sangyan.cli backup create
+- Concurrency Lock:               - AES-256-GCM encryption + PBKDF2 key derivation
+  * SQLite: BEGIN IMMEDIATE       - Online snapshot (VACUUM INTO) + WAL flush
+  * Postgres: pg_advisory_lock   - SHA-256 integrity digest manifest
+- Runs to completion before API   - Automatic retention pruning (--keep-days 30)
+```
+
+### Container Startup & Lifespan Execution Sequence
+
+```text
+Container Init (UID 10001)
+ └─ CLI: python -m sangyan.cli serve --host 0.0.0.0 --port 8000
+     ├─ 1. Configuration Validation:
+     │   └─ validate_production_config(strict=True)
+     │       ├─ Check entropy >= 32 bytes for JWT_SECRET
+     │       ├─ Reject default/insecure secret tokens ("sangyan-default-secret", etc.)
+     │       ├─ Ensure ALLOWED_ORIGINS does not contain wildcard "*"
+     │       └─ Ensure AUTH_REQUIRED is True
+     │       (Any violation raises SystemExit(1) -> Container terminates immediately)
+     ├─ 2. Database & Persistence Boot:
+     │   ├─ Engine connection test
+     │   ├─ Check schema migrations: runner.pending_migrations()
+     │   │   └─ If unapplied migrations exist -> log warning, readiness probe returns 503
+     │   └─ SqliteSaver checkpointer initialized in WAL mode at /app/checkpoints/
+     ├─ 3. Lifespan Ready:
+     │   ├─ Set app.state.is_ready = True
+     │   ├─ Liveness probe (/health/live) -> 200 OK (Process responsive)
+     │   └─ Readiness probe (/health/ready) -> 200 OK (DB connected, migrations applied)
+     └─ 4. Graceful Termination (SIGTERM / SIGINT):
+         ├─ FastAPI lifespan catches cancellation
+         ├─ Set app.state.is_ready = False (Readiness immediately 503)
+         ├─ Wait for in-flight requests to complete (within 30s terminationGracePeriod)
+         ├─ Close workflow checkpointer connection
+         ├─ Close DatabaseEngine connection pool
+         └─ Exit 0 cleanly
+```
+
+### Cryptographic Backup & Disaster Recovery Sequence
+
+```text
+Backup Creation:
+ └─ BackupManager.create_backup(encrypt_password=...)
+     ├─ 1. Flush SQLite WAL via VACUUM INTO temporary snapshot file
+     ├─ 2. Snapshot workflow checkpointer database (VACUUM INTO)
+     ├─ 3. Snapshot signing keys and active configuration files
+     ├─ 4. Assemble unencrypted tarball with manifest (timestamp, schema version)
+     ├─ 5. Compute SHA-256 integrity checksum over data package
+     ├─ 6. Derive 256-bit AES key via PBKDF2 (HMAC-SHA256, 100,000 rounds, 16-byte salt)
+     ├─ 7. Encrypt payload via AES-256-GCM (12-byte random nonce, 16-byte auth tag)
+     ├─ 8. Write binary container: MAGIC ('SGYBKP1\0') + Salt + Nonce + Tag + Ciphertext
+     ├─ 9. Write backup_manifest.json with backup_id, timestamp, SHA-256, and metadata
+     └─ 10. Prune backups older than retention policy (retention_days)
+
+Isolated Disaster Recovery Verification:
+ └─ BackupManager.restore_backup(backup_id, restore_dir, decrypt_password=...)
+     ├─ 1. Read archive header, verify MAGIC ('SGYBKP1\0')
+     ├─ 2. PBKDF2 key derivation using stored salt and operator password
+     ├─ 3. AES-256-GCM authenticated decryption (verifies authentication tag)
+     ├─ 4. Compute SHA-256 on decrypted tarball and verify match with manifest
+     ├─ 5. Extract tarball using safe extraction filter (rejection of directory traversal)
+     ├─ 6. Validate restored database integrity: PRAGMA integrity_check == 'ok'
+     ├─ 7. Validate schema version matches manifest expectation
+     └─ 8. Restore databases into production paths atomically
+```
+
+---
+
 ## Session Changelog
 
 | Area | Change | Files | Commit | Decision |
@@ -418,6 +528,16 @@ Phase 6 hardens SANGYAN for production operation by establishing an external aut
 | HTTP Transport Security Hardening | Defensive headers (nosniff, DENY, CSP), Cache-Control: no-store on API, 2 MB body bound, X-Request-ID | `sangyan/security/middleware.py`, `sangyan/api/app.py` | 28d9fbc | D-049 |
 | Low-Cardinality Telemetry & Redaction | Bounded Prometheus /metrics exporter, route normalizer, and sensitive credential log redaction | `sangyan/security/telemetry.py` | 28d9fbc | D-050 |
 | Phase 6 Security Test Suite | 32 new tests covering JWT, API keys, RBAC, IDOR, rate limiting, security headers, metrics (total 177 tests) | `tests/test_security_phase6.py`, `tests/test_database.py` | 28d9fbc | D-044..D-050 |
+| Container Packaging & Hardening | Non-root UID 10001 multi-stage Docker build, read-only rootfs, dedicated volumes, no secrets | `Dockerfile`, `.dockerignore` | Pending | D-051 |
+| Single-Replica Production Topology | Enforced replicas: 1 model for token buckets, SQLite WAL, and thread locks; zero multi-replica drift | `deploy/helm/`, `docker-compose.yml` | Pending | D-052 |
+| Production Configuration Validation | Fail-closed validate_production_config (entropy >= 32, no defaults, no wildcard CORS, auth required) | `sangyan/config.py` | Pending | D-053 |
+| Decoupled Health Semantics | Explicit /health/live (process), /health/ready (DB/migrations), /health with zero secret disclosure | `sangyan/api/app.py`, `sangyan/cli.py` | Pending | D-054 |
+| Durable Workflow Checkpointing | File-backed SQLite WAL SqliteSaver checkpointer persisted in /app/checkpoints across restarts | `sangyan/api/app.py` | Pending | D-055 |
+| Migration Lifecycle & Concurrency | Transactional double-check lock for SQLite, pg_advisory_lock for Postgres, pre-rollout Job hook | `sangyan/database/migrations.py`, `deploy/helm/` | Pending | D-056 |
+| Cryptographic Backup & Safe Restore | Online VACUUM snapshot, AES-256-GCM + PBKDF2 encryption, SHA-256 manifest, traversal-safe restore | `sangyan/database/backup.py`, `sangyan/cli.py` | Pending | D-057 |
+| Production Kubernetes & Helm Deployment | Helm chart with non-root securityContext, Ingress TLS, NetworkPolicy, Job, and CronJob | `deploy/helm/sangyan/` | Pending | D-058 |
+| Phase 7 Verification Suite | 28 new tests covering config, health, backups, migrations, container and k8s manifests (total 205 tests) | `tests/test_*.py` | Pending | D-051..D-058 |
+
 
 
 

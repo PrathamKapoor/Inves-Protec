@@ -1,0 +1,161 @@
+# ===========================================================================
+# SANGYAN Production Helm Chart Values
+# Safe defaults: non-root runtime, single replica, zero plaintext secrets.
+# ===========================================================================
+
+# Single-replica topology strictly enforced due to process-local rate limiting,
+# SQLite WAL checkpoints, and in-process investigation concurrency locks (D-052).
+replicaCount: 1
+
+image:
+  repository: sangyan
+  pullPolicy: IfNotPresent
+  tag: "0.7.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  automountServiceAccountToken: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      # Block external public access to Prometheus /metrics endpoint (D-058)
+      location /metrics {
+          return 404;
+      }
+  hosts:
+    - host: sangyan.example.gov.in
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: sangyan-tls-cert
+      hosts:
+        - sangyan.example.gov.in
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 250m
+    memory: 512Mi
+
+probes:
+  liveness:
+    path: /health/live
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /health/ready
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  startup:
+    path: /health/live
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+persistence:
+  data:
+    enabled: true
+    size: 10Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+  checkpoints:
+    enabled: true
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+  keys:
+    enabled: true
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+  backups:
+    enabled: true
+    size: 20Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+
+config:
+  env: production
+  databaseUrl: "sqlite:////app/data/sangyan.db"
+  checkpointDbPath: "/app/checkpoints/workflow_checkpoints.db"
+  keyDir: "/app/keys"
+  backupDir: "/app/backups"
+  allowedOrigins: "https://sangyan.example.gov.in"
+  logLevel: "INFO"
+  jwtAlgorithms: "HS256"
+  jwtIssuer: "sangyan-auth"
+  jwtAudience: "sangyan-api"
+  jwtLeeway: 30
+  rateLimitEnabled: "true"
+  maxRequestBodyBytes: 2097152
+
+secrets:
+  # Reference an existing pre-created Kubernetes Secret (Recommended for GitOps/Vault)
+  existingSecretName: ""
+  # Or provide values during helm install/upgrade via --set or secret values file (NEVER commit secrets to git)
+  jwtSecret: ""
+  backupEncryptionKey: ""
+
+migration:
+  enabled: true
+  hookDeletePolicy: before-hook-creation,hook-succeeded
+
+backupCron:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 02:00 UTC
+  retentionCount: 7
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+networkPolicy:
+  enabled: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 30s

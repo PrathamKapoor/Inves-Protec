@@ -1,0 +1,14 @@
+apiVersion: v2
+name: sangyan
+description: Production Helm chart for SANGYAN Investor Safety & Content Intelligence Platform
+type: application
+version: 0.7.0
+appVersion: "0.7.0"
+maintainers:
+  - name: PrathamKapoor
+    email: prathamkapoor027@gmail.com
+keywords:
+  - investor-safety
+  - post-quantum-cryptography
+  - fraud-detection
+  - langgraph

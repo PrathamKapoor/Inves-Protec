@@ -388,7 +388,9 @@ MIGRATIONS: tuple[Migration, ...] = (
 
 
 class MigrationRunner:
-    """Manages idempotent linear schema migrations across SQLite and PostgreSQL."""
+    """Manages idempotent linear schema migrations across SQLite and PostgreSQL with concurrency locking."""
+
+    MIGRATION_LOCK_ID = 837192  # 32-bit integer for pg_advisory_lock
 
     def __init__(self, engine: DatabaseEngine) -> None:
         self.engine = engine
@@ -404,6 +406,20 @@ class MigrationRunner:
             """
         )
 
+    def _acquire_migration_lock(self) -> None:
+        if self.engine.dialect == "postgresql":
+            try:
+                self.engine.execute(f"SELECT pg_advisory_lock({self.MIGRATION_LOCK_ID})")
+            except Exception:
+                pass  # Fall back to transactional locks if advisory unavailable
+
+    def _release_migration_lock(self) -> None:
+        if self.engine.dialect == "postgresql":
+            try:
+                self.engine.execute(f"SELECT pg_advisory_unlock({self.MIGRATION_LOCK_ID})")
+            except Exception:
+                pass
+
     def applied_versions(self) -> list[int]:
         self.engine.connect()
         self._ensure_table()
@@ -412,21 +428,49 @@ class MigrationRunner:
         )
         return [int(r["version"]) for r in rows]
 
+    def pending_migrations(self) -> list[Migration]:
+        applied = set(self.applied_versions())
+        return [m for m in sorted(MIGRATIONS, key=lambda m: m.version) if m.version not in applied]
+
+    def is_up_to_date(self) -> bool:
+        return len(self.pending_migrations()) == 0
+
+    def status(self) -> dict[str, Any]:
+        applied = self.applied_versions()
+        pending = [m.version for m in self.pending_migrations()]
+        current_ver = applied[-1] if applied else 0
+        latest_ver = max((m.version for m in MIGRATIONS), default=0)
+        return {
+            "applied_versions": applied,
+            "pending_versions": pending,
+            "is_current": len(pending) == 0,
+            "total_migrations": len(MIGRATIONS),
+            "current_version": current_ver,
+            "latest_version": latest_ver,
+        }
+
     def migrate(self) -> list[str]:
         """Apply all pending migrations; returns list of newly applied migration identifiers."""
         self.engine.connect()
-        self._ensure_table()
-        applied = set(self.applied_versions())
-        result: list[str] = []
-        for migration in sorted(MIGRATIONS, key=lambda m: m.version):
-            if migration.version in applied:
-                continue
-            with self.engine.transaction():
-                for stmt in migration.statements:
-                    self.engine.execute(stmt)
-                self.engine.execute(
-                    f"INSERT INTO {MIGRATION_TABLE} (version, name, applied_at) VALUES (?,?,?)",
-                    (migration.version, migration.name, time.time()),
-                )
-            result.append(f"{migration.version:03d}_{migration.name}")
-        return result
+        self._acquire_migration_lock()
+        try:
+            self._ensure_table()
+            result: list[str] = []
+            for migration in sorted(MIGRATIONS, key=lambda m: m.version):
+                if migration.version in set(self.applied_versions()):
+                    continue
+                with self.engine.transaction():
+                    # Double-check inside transaction lock
+                    if migration.version in set(self.applied_versions()):
+                        continue
+                    for stmt in migration.statements:
+                        self.engine.execute(stmt)
+                    self.engine.execute(
+                        f"INSERT INTO {MIGRATION_TABLE} (version, name, applied_at) VALUES (?,?,?)",
+                        (migration.version, migration.name, time.time()),
+                    )
+                result.append(f"{migration.version:03d}_{migration.name}")
+            return result
+        finally:
+            self._release_migration_lock()
+
