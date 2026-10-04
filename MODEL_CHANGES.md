@@ -292,4 +292,91 @@ Migration 002 (`sangyan/database/migrations.py`) registers three dedicated table
    - `updated_at` (TEXT, ISO-8601)
    - Scoped index on `(organization_id, investigation_id)`.
 
+---
+
+## 8. Phase 5 Workflow Orchestration, State & Checkpoint Models
+
+Phase 5 introduces LangGraph StateGraph durable orchestration, human-in-the-loop supervisory review gates, and Migration 003 workflow execution tracking.
+
+### 8.1 `InvestigationWorkflowState` (`sangyan.workflow.state`)
+Typed orchestration state dictionary tracking execution progression without duplicating or replacing relational persistence:
+- **Core Identifiers**: `organization_id`, `investigation_id`, `user_id`, `run_id`, `thread_id` (`<org>:<inv>:<run>`).
+- **Domain State Collections**:
+  - `content_items` & `content_item_ids`
+  - `claims` & `claim_ids`
+  - `entities` & `entity_ids`
+  - `signals` & `signal_ids`
+  - `findings` & `finding_ids`
+  - `evidence_items` & `evidence_ids`
+  - `correlations` & `correlation_ids`
+  - `scam_chain`
+  - `scam_patterns`
+  - `guidance` & `guidance_ids`
+  - `grievance`
+  - `explanation`
+- **Epistemic & Execution Flags**:
+  - `risk_posture`: `SAFE`, `HIGH_RISK`, `SUSPICIOUS`, `UNVERIFIED`.
+  - `is_educational_warning`: Boolean suppressing false positives on regulatory caution circulars.
+  - `review_required`: Boolean indicating whether human supervisory review is necessary.
+  - `review_reason`: Justification for pausing at the review gate.
+  - `review_decision`: Supervisor decision payload committed during resumption.
+  - `trust_receipt_id`: Post-quantum ML-DSA-65 signed receipt pointer.
+  - `trust_status`: `FINALIZED`, `FAILED`, `PENDING`.
+  - `status`: `INTAKE`, `ANALYZING`, `VERIFYING`, `CORRELATING`, `AWAITING_REVIEW`, `FINALIZING`, `COMPLETED`, `PARTIALLY_COMPLETED`, `FAILED`, `CANCELLED`.
+  - `current_stage`: Current graph node name.
+  - `errors` & `warnings`: Diagnostic execution messages.
+
+### 8.2 `WorkflowRun` (`sangyan.domain.models`)
+Relational execution ledger representing one execution of a StateGraph for an investigation:
+```python
+@dataclass
+class WorkflowRun:
+    id: str = field(default_factory=lambda: new_id("wfr"))
+    organization_id: str
+    investigation_id: str
+    thread_id: str                          # Canonical: <org_id>:<investigation_id>:<run_id>
+    run_id: str
+    status: str = "RUNNING"                 # RUNNING, AWAITING_REVIEW, COMPLETED, FAILED, CANCELLED, PARTIALLY_COMPLETED
+    current_node: str = "intake_node"
+    retry_count: int = 0
+    checkpoint_id: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+    schema_version: int = CURRENT_SCHEMA_VERSION
+```
+
+### 8.3 Migration 003 Schema Expansion
+Migration 003 (`sangyan/database/migrations.py`) registers the `sangyan_workflow_runs` relational table:
+```sql
+CREATE TABLE IF NOT EXISTS sangyan_workflow_runs (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    investigation_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_node TEXT NOT NULL,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    checkpoint_id TEXT,
+    metadata TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    FOREIGN KEY (investigation_id) REFERENCES sangyan_investigations(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_org_inv ON sangyan_workflow_runs(organization_id, investigation_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_thread ON sangyan_workflow_runs(organization_id, thread_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON sangyan_workflow_runs(organization_id, status);
+```
+
+### 8.4 Checkpointing & Tenant Boundary Semantics
+- **Durable Checkpointing**: Powered by LangGraph `SqliteSaver` in WAL mode, ensuring execution state survives abrupt worker termination, process crashes, and prolonged review interruptions.
+- **Thread Identity Validation**: Canonical format `<organization_id>:<investigation_id>:<run_id>` prevents cross-tenant state access; attempts to read, resume, or cancel across tenants raise `TenantMismatchError` prior to checkpoint deserialization.
+- **Human-in-the-Loop Interruption**: Triggered at `review_gate_node` via `interrupt(...)`. The graph halts, serializing in-flight state to SQLite while setting investigation and run status to `AWAITING_REVIEW`.
+- **Epistemic Concurrency**: First valid review decision wins under investigation locks. Conflicting concurrent review submissions raise `ReviewConflictError`.
+- **Role Enforcement**: `sangyan_viewer` role is strictly denied review submission (`PermissionDeniedError`).
+- **Post-Quantum Trust Finalization**: ML-DSA-65 post-quantum signing executes after the review gate commits. Re-invoking trust finalization idempotently returns the existing `TrustReceipt`.
+
+
 

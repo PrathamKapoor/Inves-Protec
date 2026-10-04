@@ -566,6 +566,128 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Legally and forensically robust investigation records verifiable by third-party auditors.
 - Files: `sangyan/verification/trust_binding.py`, `sangyan/correlation/orchestrator.py`, `tests/test_correlation.py`
 
+---
+
+### D-037: LangGraph StateGraph Architecture & Workflow State Model
+- Date / phase / commit: 2026-10-04, Phase 5
+- Context: Phase 5 mandates orchestrating the complete SANGYAN investigation lifecycle using LangGraph StateGraph without duplicating existing business logic from intelligence, verification, correlation, or guidance subsystems.
+- Decision: Implemented `InvestigationWorkflow` (`sangyan/workflow/graph.py`) and `InvestigationWorkflowState` (`sangyan/workflow/state.py`):
+  1. Defined typed orchestration state `InvestigationWorkflowState` holding explicit identifiers (`investigation_id`, `organization_id`, `user_id`, `run_id`, `thread_id`), stage outputs, error/warning lists, and lifecycle flags. Large binary assets and raw secrets are strictly omitted from the state.
+  2. Established explicit node boundaries that delegate exclusively to underlying domain services:
+     - `intake_node`: Ingests and registers `ContentItem` instances in tenant scope.
+     - `intelligence_node`: Invokes `ContentIntelligenceEngine` for atomic claims, entities, and observable signals.
+     - `verification_node`: Invokes `ClaimVerificationEngine` across claims and authoritative adapters.
+     - `correlation_node`: Invokes `InvestigationCorrelator` for cross-entity graph construction.
+     - `scam_chain_node`: Invokes `ScamChainReconstructor` and `ScamTaxonomyClassifier`.
+     - `guidance_node`: Invokes `GuidanceEngine` and `GrievanceRouter`.
+     - `explanation_node`: Invokes `InvestigationExplainer` and evaluates review necessity.
+     - `review_gate_node`: Handles durable human-in-the-loop review pause/resume via LangGraph `interrupt()`.
+     - `trust_finalization_node`: Canonicalizes dossier and signs with ML-DSA-65 post-quantum cryptography.
+     - `completion_node`: Atomically marks the investigation as `COMPLETED` and emits audit events.
+     - `failure_node`: Handles unrecoverable errors, preserves partial evidence, and records failure status.
+  3. Preserved strict separation: Nodes orchestrate domain services and update workflow state, but implement zero ad-hoc business rules or duplicate detection heuristics.
+- Why: Provides clear architectural separation between deterministic domain engines and stateful execution orchestration.
+- Alternatives considered: Monolithic node architecture or embedding business rules directly into graph conditionals (rejected: violates SANGYAN core architectural principles and creates duplicate ungrounded logic).
+- Consequences: Maintainable, declarative workflow graph with transparent node contracts.
+- Files: `sangyan/workflow/graph.py`, `sangyan/workflow/state.py`, `sangyan/workflow/nodes.py`
+
+---
+
+### D-038: Durable SQLite Checkpointing & Tenant-Scoped Thread Identity (`org:inv:run`)
+- Date / phase / commit: 2026-10-04, Phase 5
+- Context: Workflows must survive worker restarts, process crashes, and prolonged human review pauses without losing in-flight state. Checkpoint storage must be durable, tenant-isolated, and thread-safe.
+- Decision: Implemented `WorkflowCheckpointer` and checkpoint manager (`sangyan/workflow/checkpointer.py`):
+  1. Integrated LangGraph `SqliteSaver` backed by durable SQLite storage with WAL mode enabled.
+  2. Enforced canonical composite thread identity format: `<organization_id>:<investigation_id>:<run_id>`.
+  3. Enforced strict tenant pre-validation: Any request to load, inspect, resume, or cancel a checkpoint must verify that the caller belongs to the `<organization_id>` prefix of the `thread_id`.
+  4. Added Migration 003 table `sangyan_workflow_runs` to provide a queryable relational ledger of workflow runs, thread IDs, statuses, and retry metrics alongside the binary checkpoint store.
+- Why: Prevents cross-tenant state leakage while ensuring persistent, crash-resilient workflow checkpoints across process lifecycles.
+- Alternatives considered: In-memory checkpointer only (rejected: does not survive process restart; cannot support real human review pauses) or pure Redis state (rejected: unnecessary infrastructure dependency).
+- Consequences: Durable, restart-proof execution state with deterministic tenant isolation.
+- Files: `sangyan/workflow/checkpointer.py`, `sangyan/database/migrations.py`
+
+---
+
+### D-039: Human-in-the-Loop Durable Interruption & Resume Semantics
+- Date / phase / commit: 2026-10-04, Phase 5
+- Context: High-stakes financial determinations with conflicting authoritative evidence or suspicious signals require supervisory human review. The workflow must physically pause, persist to disk, allow process restart, and resume seamlessly once an authorized analyst submits a decision.
+- Decision: Implemented human-in-the-loop review mechanism (`sangyan/workflow/nodes.py`, `sangyan/workflow/service.py`):
+  1. Review gate criteria: Triggered if `risk_posture == "SUSPICIOUS"`, if any claim resolves to `CONFLICTING`, if unverified high-risk signals are present, or if explicitly requested.
+  2. Durable pause: `review_gate_node` executes LangGraph `interrupt({"investigation_id": inv_id, "reason": review_reason, "posture": risk_posture})`. The graph execution halts immediately and serializes current state to SQLite.
+  3. Relational status tracking: `sangyan_investigations` and `sangyan_workflow_runs` are updated to `status="AWAITING_REVIEW"`.
+  4. Resume execution: An analyst with `investigation:review` permission invokes `resume_investigation()`. The service validates caller authorization, applies `Command(resume=review_payload)` to the checkpointer thread, records the `Review` domain entity in `sangyan_reviews`, and resumes the graph directly into `trust_finalization_node`.
+  5. Facts immutability: The reviewer's decision (`CONFIRM`, `DISMISS`, `ESCALATE`, `ANNOTATE`) is recorded as a supervisory layer on top of the investigation; it cannot delete, overwrite, or forge historical evidence or registry certificates.
+- Why: Satisfies regulatory oversight mandates while ensuring human intervention never alters underlying factual evidence.
+- Alternatives considered: Ephemeral function callbacks or boolean in-memory flags (rejected: cannot survive server restarts and fails multi-tenant security requirements).
+- Consequences: Real, durable human-in-the-loop governance for ambiguous or high-consequence investigations.
+- Files: `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py`, `tests/test_workflow.py`
+
+---
+
+### D-040: Fault Resilience, Bounded Retry Policy & Error Classification
+- Date / phase / commit: 2026-10-04, Phase 5
+- Context: Unhandled exceptions during upstream network fetches, transient database lock contention, or adapter execution must not crash the orchestrator or leave investigations in an undefined state.
+- Decision: Implemented structured error classification and retry policies (`sangyan/workflow/errors.py`, `sangyan/workflow/nodes.py`):
+  1. Classified errors into retryable vs non-retryable categories:
+     - Retryable: `TransientNetworkError`, `UpstreamUnavailableError`, `DatabaseBusyError`.
+     - Non-retryable: `DomainValidationError`, `PermissionDeniedError`, `SecurityViolationError`, `ContradictoryEvidenceError`.
+  2. Bounded retries: Enforced maximum retry limit (default 3 attempts) with exponential backoff and jitter. Non-retryable errors immediately route to `failure_node`.
+  3. Node-level exception boundaries: Every node wraps execution in try/except blocks, recording errors into the `errors` state list and updating run retry counters.
+  4. Failure isolation: Failure in downstream nodes (e.g. guidance or trust signing) retains all previously gathered content items, claims, entities, and evidence intact.
+- Why: Prevents infinite retry loops while maintaining high operational resilience against transient infrastructure disruptions.
+- Alternatives considered: Uncaught exception bubbling (rejected: causes process crashes and lost state) or blanket catch-all retries (rejected: causes futile retries on logic/validation errors).
+- Consequences: Robust, self-healing execution with clear diagnostic audit logs.
+- Files: `sangyan/workflow/errors.py`, `sangyan/workflow/nodes.py`, `tests/test_workflow.py`
+
+---
+
+### D-041: Workflow Cancellation Semantics & Partial State Preservation
+- Date / phase / commit: 2026-10-04, Phase 5
+- Context: Operators must be able to cancel in-flight or awaiting-review investigations. Cancellation must cleanly halt execution, preserve all already-persisted evidence, and prevent corrupted resumption.
+- Decision: Implemented `cancel_investigation()` in `WorkflowService` (`sangyan/workflow/service.py`):
+  1. Authorization: Only users with `investigation:create` or `tenant:manage` within the owning organization may cancel an investigation.
+  2. State transition: Updates `sangyan_investigations` and `sangyan_workflow_runs` to `status="CANCELLED"`.
+  3. Immutability protection: Completed investigations cannot be cancelled (`CannotCancelCompletedInvestigationError`).
+  4. Partial preservation: All evidence, claims, entities, and findings accumulated prior to cancellation remain queryable in the repository for forensic reference.
+  5. Resumption blocking: Attempting to resume a cancelled investigation is strictly rejected.
+- Why: Provides administrative operational control while safeguarding evidentiary integrity.
+- Alternatives considered: Dropping or rolling back all database tables on cancellation (rejected: destroys valuable forensic evidence gathered up to the cancellation point).
+- Consequences: Clean, auditable cancellation lifecycle with evidence preservation.
+- Files: `sangyan/workflow/service.py`, `sangyan/domain/models.py`, `tests/test_workflow.py`
+
+---
+
+### D-042: Epistemic Review Concurrency & Multi-Tenant Authorization Guardrails
+- Date / phase / commit: 2026-10-04, Phase 5
+- Context: Simultaneous review submissions by multiple analysts must be handled deterministically without silent overwrites, and tenant boundaries must be strictly enforced.
+- Decision: Implemented concurrency controls and RBAC validation (`sangyan/workflow/service.py`):
+  1. Concurrency policy: "First valid review decision wins". Uses investigation-level threading locks and database status verification (`status == 'AWAITING_REVIEW'`). Once a review is accepted and the status advances to `FINALIZING` / `COMPLETED`, subsequent review attempts raise `ReviewConflictError`.
+  2. Role enforcement:
+     - `sangyan_viewer`: Denied access to review submission (`PermissionDeniedError`).
+     - `sangyan_analyst` / `sangyan_admin`: Permitted to submit reviews within their organization.
+  3. Cross-tenant isolation: Calling `resume_investigation()` or `get_workflow_state()` with an organization ID differing from the investigation's owning organization raises `PermissionDeniedError` before reading any state.
+  4. Decision replay defense: Review decisions contain unique IDs, timestamps, and target investigation IDs; attempting to replay a decision against a different investigation is rejected.
+- Why: Enforces institutional audit standards and eliminates race conditions in collaborative investigation environments.
+- Alternatives considered: Last-write-wins (rejected: allows accidental overwriting of supervisory decisions).
+- Consequences: Deterministic review resolution and strict multi-tenant confidentiality.
+- Files: `sangyan/workflow/service.py`, `tests/test_workflow.py`
+
+---
+
+### D-043: Post-Quantum Trust Finalization & Idempotent Dossier Signing
+- Date / phase / commit: 2026-10-04, Phase 5
+- Context: Final investigation dossiers must be cryptographically sealed with post-quantum digital signatures. Trust finalization must occur only after all required stages and human reviews are complete, and repeated finalization requests must be idempotent.
+- Decision: Implemented `trust_finalization_node` and trust binding lifecycle (`sangyan/workflow/nodes.py`, `sangyan/workflow/service.py`):
+  1. Finalization timing: Positioned strictly after `review_gate_node`. If human review was required, signing only executes after an authorized decision is committed.
+  2. Idempotency: If `trust_receipt_id` already exists on the state/investigation and verifies against the public key, the existing `TrustReceipt` is reused without generating redundant signatures.
+  3. Signing failure resilience: If the PQC cryptographic provider fails (e.g. key unavailable), the investigation is marked `trust_status="FAILED"`, the analytical report remains readable, and an explicit audit event is recorded without destroying the investigation data.
+  4. Integrity verification: Signed receipts bind `investigation_id`, `organization_id`, content hashes, findings, evidence hashes, and scam patterns under NIST FIPS 204 ML-DSA-65.
+- Why: Guarantees cryptographic non-repudiation and post-quantum tamper evidence for completed investigations while preserving availability if signing fails.
+- Alternatives considered: Signing transient intermediate node states (rejected: creates noisy receipts for incomplete or mutable data).
+- Consequences: Tamper-evident, audit-ready investigation dossiers with post-quantum security guarantees.
+- Files: `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py`, `tests/test_workflow.py`
+
+
 
 
 

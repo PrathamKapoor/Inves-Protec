@@ -12,6 +12,13 @@ from sangyan.core.errors import DomainValidationError, NotFoundError, Permission
 from sangyan.domain.models import Claim, ContentItem
 from sangyan.verification.engine import ClaimVerificationEngine, InvestigationReport, VerificationOutcome
 from sangyan.verification.sources import AuthoritativeSourceMetadata
+from sangyan.workflow.errors import (
+    CannotCancelCompletedInvestigationError,
+    InvestigationCancelledError,
+    ReviewConflictError,
+    TenantMismatchError,
+)
+from sangyan.workflow.service import WorkflowService
 
 
 class ClaimVerifyRequest(BaseModel):
@@ -36,10 +43,34 @@ class InvestigationBatchRequest(BaseModel):
     user_id: Optional[str] = Field(default=None, description="Authenticated user identifier")
 
 
+class WorkflowStartRequest(BaseModel):
+    contents: list[str] = Field(..., min_length=1, description="List of messages, claims, or URLs in investigation chain")
+    content_type: str = Field(default="text/plain", description="Content type e.g. text/plain or url")
+    organization_id: str = Field(..., description="Tenant organization ID")
+    user_id: str = Field(..., description="Authenticated user identifier")
+    require_review: bool = Field(default=False, description="Whether to require human review gate")
+    metadata: Optional[dict[str, Any]] = Field(default=None, description="Optional metadata")
+
+
+class WorkflowResumeRequest(BaseModel):
+    action: str = Field(..., description="Review action: CONFIRM, DISMISS, ESCALATE, ANNOTATE")
+    user_id: str = Field(..., description="Authenticated reviewer user ID")
+    organization_id: str = Field(..., description="Tenant organization ID")
+    reason: str = Field(default="", description="Review justification / notes")
+    finding_id: Optional[str] = Field(default=None, description="Specific finding ID if applicable")
+
+
+class WorkflowCancelRequest(BaseModel):
+    user_id: str = Field(..., description="Authenticated user ID")
+    organization_id: str = Field(..., description="Tenant organization ID")
+    reason: str = Field(default="", description="Cancellation reason")
+
+
 def get_api_router(
     engine: ClaimVerificationEngine,
     repository_factory: Optional[Any] = None,
     orchestrator: Optional[InvestigationOrchestrator] = None,
+    workflow_service: Optional[WorkflowService] = None,
 ) -> APIRouter:
     """Build FastAPI router configured with verification engine and tenancy repository."""
     router = APIRouter(prefix="/api/v1", tags=["verification"])
@@ -298,6 +329,139 @@ def get_api_router(
         if not record:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grievance record not found")
         return record.to_dict()
+
+    # -----------------------------------------------------------------------
+    # LangGraph Workflow Endpoints
+    # -----------------------------------------------------------------------
+    @router.post("/workflow/start", response_model=dict[str, Any])
+    def start_workflow_investigation(req: WorkflowStartRequest):
+        """Initiate durable LangGraph investigation workflow across multiple content items."""
+        if not workflow_service:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Workflow service not configured")
+        repo = _get_repo(req.organization_id, req.user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        items = [
+            ContentItem(
+                organization_id=req.organization_id,
+                content_type=req.content_type,
+                raw_content=c,
+            )
+            for c in req.contents
+        ]
+        try:
+            state = workflow_service.start_investigation(
+                content_items=items,
+                user_id=req.user_id,
+                organization_id=req.organization_id,
+                require_review=req.require_review,
+                metadata=req.metadata,
+            )
+            return state
+        except PermissionDeniedError as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        except DomainValidationError as e:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    @router.post("/workflow/{investigation_id}/resume", response_model=dict[str, Any])
+    def resume_workflow_investigation(investigation_id: str, req: WorkflowResumeRequest):
+        """Resume an investigation paused at review_gate_node with an authorized supervisory decision."""
+        if not workflow_service:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Workflow service not configured")
+        repo = _get_repo(req.organization_id, req.user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        try:
+            state = workflow_service.resume_investigation(
+                investigation_id=investigation_id,
+                review_action=req.action,
+                user_id=req.user_id,
+                organization_id=req.organization_id,
+                reason=req.reason,
+                finding_id=req.finding_id,
+            )
+            return state
+        except ReviewConflictError as e:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+        except InvestigationCancelledError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except (PermissionDeniedError, TenantMismatchError) as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        except NotFoundError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    @router.post("/workflow/{investigation_id}/cancel", response_model=dict[str, Any])
+    def cancel_workflow_investigation(investigation_id: str, req: WorkflowCancelRequest):
+        """Cancel an in-flight or awaiting-review workflow investigation while preserving evidence."""
+        if not workflow_service:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Workflow service not configured")
+        repo = _get_repo(req.organization_id, req.user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        try:
+            inv = workflow_service.cancel_investigation(
+                investigation_id=investigation_id,
+                user_id=req.user_id,
+                organization_id=req.organization_id,
+                reason=req.reason,
+            )
+            return inv.to_dict()
+        except CannotCancelCompletedInvestigationError as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        except (PermissionDeniedError, TenantMismatchError) as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        except NotFoundError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+    @router.get("/workflow/{investigation_id}/state", response_model=dict[str, Any])
+    def get_workflow_investigation_state(
+        investigation_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """Retrieve current durable checkpoint snapshot state for an investigation."""
+        if not workflow_service:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="Workflow service not configured")
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        try:
+            state = workflow_service.get_workflow_state(investigation_id, organization_id, user_id=user_id)
+            if not state:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow state not found")
+            return state
+        except PermissionDeniedError as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        except NotFoundError as e:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    @router.get("/workflow/runs", response_model=list[dict[str, Any]])
+    def list_workflow_runs(
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+        status_filter: Optional[str] = Query(None, alias="status"),
+        limit: int = Query(50, ge=1, le=100),
+        offset: int = Query(0, ge=0),
+    ):
+        """List historical workflow execution runs for tenant."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+
+        runs = repo.list_workflow_runs(limit=limit, offset=offset, status=status_filter)
+        return [r.to_dict() for r in runs]
 
     return router
 

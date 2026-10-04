@@ -23,6 +23,7 @@ from sangyan.domain.models import (
     Review,
     Signal,
     Source,
+    WorkflowRun,
 )
 from sangyan.tenancy.models import SANGYAN_ROLES, has_permission
 
@@ -1205,5 +1206,188 @@ class TenantRepository:
             metadata=json.loads(row["metadata"] or "{}"),
             created_at=row["created_at"],
         )
+
+    # -----------------------------------------------------------------------
+    # Workflow Runs
+    # -----------------------------------------------------------------------
+
+    def save_workflow_run(self, run: WorkflowRun) -> str:
+        self._require_permission("investigation:create")
+        if run.organization_id != self.organization_id:
+            raise PermissionDeniedError("workflow run tenant does not match active organization")
+        problems = run.validate()
+        if problems:
+            raise DomainValidationError(f"invalid workflow run: {problems}", errors=problems)
+        self._db.execute(
+            """
+            INSERT INTO sangyan_workflow_runs
+            (id, organization_id, investigation_id, thread_id, run_id, status,
+             current_node, retry_count, checkpoint_id, metadata, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                run.id,
+                run.organization_id,
+                run.investigation_id,
+                run.thread_id,
+                run.run_id,
+                run.status,
+                run.current_node,
+                run.retry_count,
+                run.checkpoint_id,
+                json.dumps(run.metadata),
+                run.created_at,
+                run.updated_at,
+            ),
+        )
+        return run.id
+
+    def get_workflow_run(self, run_id: str) -> WorkflowRun:
+        self._require_permission("investigation:read")
+        row = self._db.query_one(
+            "SELECT * FROM sangyan_workflow_runs WHERE id=? AND organization_id=?",
+            (run_id, self.organization_id),
+        )
+        if row is None:
+            raise NotFoundError(f"workflow run '{run_id}' not found in organization")
+        return WorkflowRun(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            investigation_id=row["investigation_id"],
+            thread_id=row["thread_id"],
+            run_id=row["run_id"],
+            status=row["status"],
+            current_node=row["current_node"],
+            retry_count=int(row["retry_count"]),
+            checkpoint_id=row["checkpoint_id"],
+            metadata=json.loads(row["metadata"] or "{}"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def get_workflow_run_by_investigation(self, inv_id: str) -> WorkflowRun | None:
+        self._require_permission("investigation:read")
+        row = self._db.query_one(
+            "SELECT * FROM sangyan_workflow_runs WHERE investigation_id=? AND organization_id=? ORDER BY created_at DESC LIMIT 1",
+            (inv_id, self.organization_id),
+        )
+        if row is None:
+            return None
+        return WorkflowRun(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            investigation_id=row["investigation_id"],
+            thread_id=row["thread_id"],
+            run_id=row["run_id"],
+            status=row["status"],
+            current_node=row["current_node"],
+            retry_count=int(row["retry_count"]),
+            checkpoint_id=row["checkpoint_id"],
+            metadata=json.loads(row["metadata"] or "{}"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def get_workflow_run_by_thread(self, thread_id: str) -> WorkflowRun | None:
+        self._require_permission("investigation:read")
+        row = self._db.query_one(
+            "SELECT * FROM sangyan_workflow_runs WHERE thread_id=? AND organization_id=? ORDER BY created_at DESC LIMIT 1",
+            (thread_id, self.organization_id),
+        )
+        if row is None:
+            return None
+        return WorkflowRun(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            investigation_id=row["investigation_id"],
+            thread_id=row["thread_id"],
+            run_id=row["run_id"],
+            status=row["status"],
+            current_node=row["current_node"],
+            retry_count=int(row["retry_count"]),
+            checkpoint_id=row["checkpoint_id"],
+            metadata=json.loads(row["metadata"] or "{}"),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    def update_workflow_run(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        current_node: str | None = None,
+        retry_count: int | None = None,
+        checkpoint_id: str | None = None,
+        error_message: str | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        self._require_permission("investigation:create")
+        run = self.get_workflow_run(run_id)
+        new_status = status or run.status
+        new_node = current_node or run.current_node
+        new_retries = retry_count if retry_count is not None else run.retry_count
+        new_cp = checkpoint_id if checkpoint_id is not None else run.checkpoint_id
+        new_meta = dict(metadata) if metadata is not None else dict(run.metadata)
+        if error_message:
+            new_meta["error"] = error_message
+        now = time.time()
+        self._db.execute(
+            """
+            UPDATE sangyan_workflow_runs
+            SET status=?, current_node=?, retry_count=?, checkpoint_id=?, metadata=?, updated_at=?
+            WHERE id=? AND organization_id=?
+            """,
+            (
+                new_status,
+                new_node,
+                new_retries,
+                new_cp,
+                json.dumps(new_meta),
+                now,
+                run_id,
+                self.organization_id,
+            ),
+        )
+
+    def list_workflow_runs(
+        self, limit: int = 50, offset: int = 0, status: str | None = None
+    ) -> list[WorkflowRun]:
+        self._require_permission("investigation:read")
+        if status:
+            rows = self._db.query_all(
+                """
+                SELECT * FROM sangyan_workflow_runs
+                WHERE organization_id=? AND status=?
+                ORDER BY created_at DESC LIMIT ? OFFSET ?
+                """,
+                (self.organization_id, status, limit, offset),
+            )
+        else:
+            rows = self._db.query_all(
+                """
+                SELECT * FROM sangyan_workflow_runs
+                WHERE organization_id=?
+                ORDER BY created_at DESC LIMIT ? OFFSET ?
+                """,
+                (self.organization_id, limit, offset),
+            )
+        return [
+            WorkflowRun(
+                id=r["id"],
+                organization_id=r["organization_id"],
+                investigation_id=r["investigation_id"],
+                thread_id=r["thread_id"],
+                run_id=r["run_id"],
+                status=r["status"],
+                current_node=r["current_node"],
+                retry_count=int(r["retry_count"]),
+                checkpoint_id=r["checkpoint_id"],
+                metadata=json.loads(r["metadata"] or "{}"),
+                created_at=r["created_at"],
+                updated_at=r["updated_at"],
+            )
+            for r in rows
+        ]
 
 

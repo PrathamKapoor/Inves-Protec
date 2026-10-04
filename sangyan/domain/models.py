@@ -169,9 +169,13 @@ INVESTIGATION_STATUSES = (
     "ANALYZING",
     "RETRIEVING",
     "VERIFYING",
+    "CORRELATING",
     "AWAITING_REVIEW",
+    "FINALIZING",
     "COMPLETED",
+    "PARTIALLY_COMPLETED",
     "FAILED",
+    "CANCELLED",
 )
 
 REVIEW_ACTIONS = ("CONFIRM", "DISMISS", "ESCALATE", "DEFER", "ANNOTATE")
@@ -1188,6 +1192,80 @@ class InvestigationExplanation:
             why_flagged=list(d.get("why_flagged", [])),
             what_we_do_not_know=list(d.get("what_we_do_not_know", [])),
             limitations=list(d.get("limitations", [])),
+        )
+
+
+WORKFLOW_RUN_STATUSES = (
+    "RUNNING",
+    "AWAITING_REVIEW",
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "PARTIALLY_COMPLETED",
+)
+
+# ---------------------------------------------------------------------------
+# 16. WorkflowRun
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WorkflowRun:
+    """Relational execution record of a LangGraph workflow instance."""
+
+    organization_id: str
+    investigation_id: str
+    thread_id: str
+    run_id: str
+    id: str = field(default_factory=lambda: new_id("run"))
+    status: str = "RUNNING"
+    current_node: str = "intake_node"
+    retry_count: int = 0
+    checkpoint_id: Optional[str] = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def validate(self) -> list[str]:
+        errors: list[str] = []
+        require(bool(self.id), "id is required", errors)
+        require(bool(self.organization_id), "organization_id is required", errors)
+        require(bool(self.investigation_id), "investigation_id is required", errors)
+        require(bool(self.thread_id), "thread_id is required", errors)
+        require(bool(self.run_id), "run_id is required", errors)
+        validate_enum(self.status, WORKFLOW_RUN_STATUSES, "status", errors)
+        return errors
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "organization_id": self.organization_id,
+            "investigation_id": self.investigation_id,
+            "thread_id": self.thread_id,
+            "run_id": self.run_id,
+            "status": self.status,
+            "current_node": self.current_node,
+            "retry_count": self.retry_count,
+            "checkpoint_id": self.checkpoint_id,
+            "metadata": dict(self.metadata),
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "WorkflowRun":
+        return cls(
+            organization_id=d["organization_id"],
+            investigation_id=d["investigation_id"],
+            thread_id=d["thread_id"],
+            run_id=d["run_id"],
+            id=d.get("id") or new_id("run"),
+            status=d.get("status", "RUNNING"),
+            current_node=d.get("current_node", "intake_node"),
+            retry_count=int(d.get("retry_count", 0)),
+            checkpoint_id=d.get("checkpoint_id"),
+            metadata=dict(d.get("metadata", {})),
+            created_at=float(d.get("created_at", time.time())),
+            updated_at=float(d.get("updated_at", time.time())),
         )
 
 

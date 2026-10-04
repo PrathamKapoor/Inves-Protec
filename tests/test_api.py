@@ -233,3 +233,92 @@ def test_investigate_batch_api(app_and_repo):
     assert res_grv.status_code == 200
     assert res_grv.json()["category"] in {"INVESTMENT_SCAM", "CYBER_FRAUD"}
 
+
+def test_workflow_api_lifecycle(app_and_repo):
+    client, repo, org_id, user_id = app_and_repo
+
+    # 1. Start workflow requiring review
+    payload = {
+        "contents": [
+            "Join our VIP Telegram group https://t.me/profit_club with guaranteed returns.",
+            "Transfer funds to fastprofit@paytm.",
+        ],
+        "organization_id": org_id,
+        "user_id": user_id,
+        "require_review": True,
+    }
+    res = client.post("/api/v1/workflow/start", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "AWAITING_REVIEW"
+    assert data["review_required"] is True
+    inv_id = data["investigation_id"]
+
+    # 2. Get workflow state
+    res_state = client.get(f"/api/v1/workflow/{inv_id}/state?organization_id={org_id}&user_id={user_id}")
+    assert res_state.status_code == 200
+    state_data = res_state.json()
+    assert state_data["status"] == "AWAITING_REVIEW"
+
+    # 3. List workflow runs
+    res_runs = client.get(f"/api/v1/workflow/runs?organization_id={org_id}&user_id={user_id}")
+    assert res_runs.status_code == 200
+    runs = res_runs.json()
+    assert len(runs) >= 1
+    assert runs[0]["investigation_id"] == inv_id
+
+    # 4. Resume workflow
+    res_resume = client.post(
+        f"/api/v1/workflow/{inv_id}/resume",
+        json={
+            "action": "CONFIRM",
+            "user_id": user_id,
+            "organization_id": org_id,
+            "reason": "Confirmed fraudulent solicitation",
+        },
+    )
+    assert res_resume.status_code == 200
+    resume_data = res_resume.json()
+    assert resume_data["status"] == "COMPLETED"
+    assert resume_data["trust_status"] == "FINALIZED"
+    assert resume_data["trust_receipt_id"] is not None
+
+
+def test_workflow_api_cancellation(app_and_repo):
+    client, repo, org_id, user_id = app_and_repo
+
+    # Start workflow requiring review
+    payload = {
+        "contents": ["Dubious advisory claim"],
+        "organization_id": org_id,
+        "user_id": user_id,
+        "require_review": True,
+    }
+    res = client.post("/api/v1/workflow/start", json=payload)
+    assert res.status_code == 200
+    inv_id = res.json()["investigation_id"]
+
+    # Cancel workflow
+    res_cancel = client.post(
+        f"/api/v1/workflow/{inv_id}/cancel",
+        json={
+            "user_id": user_id,
+            "organization_id": org_id,
+            "reason": "User requested withdrawal",
+        },
+    )
+    assert res_cancel.status_code == 200
+    assert res_cancel.json()["status"] == "CANCELLED"
+
+    # Resuming cancelled workflow must return 400
+    res_resume = client.post(
+        f"/api/v1/workflow/{inv_id}/resume",
+        json={
+            "action": "CONFIRM",
+            "user_id": user_id,
+            "organization_id": org_id,
+        },
+    )
+    assert res_resume.status_code == 400
+
+

@@ -18,6 +18,8 @@ from sangyan.verification.engine import ClaimVerificationEngine
 from sangyan.verification.snapshots import SnapshotManager
 from sangyan.verification.sources import AuthoritativeSourceRegistry
 from sangyan.verification.trust_binding import TrustBindingService
+from sangyan.workflow.nodes import WorkflowNodeSuite
+from sangyan.workflow.service import WorkflowService
 
 
 def create_app(
@@ -27,12 +29,13 @@ def create_app(
     snapshot_manager: Optional[SnapshotManager] = None,
     verification_engine: Optional[ClaimVerificationEngine] = None,
     orchestrator: Optional[InvestigationOrchestrator] = None,
+    workflow_service: Optional[WorkflowService] = None,
 ) -> FastAPI:
     """Create and configure a production-ready SANGYAN FastAPI application instance."""
     app = FastAPI(
         title="SANGYAN Authoritative Verification API",
         description="Public-good investor safety platform: authoritative claim verification, evidence provenance, and ML-DSA-65 post-quantum trust receipts.",
-        version="0.4.0",
+        version="0.5.0",
     )
 
     app.add_middleware(
@@ -68,8 +71,18 @@ def create_app(
     def repository_factory(org_id: str, usr_id: str) -> TenantRepository:
         return TenantRepository(db_engine, organization_id=org_id, user_id=usr_id)
 
+    node_suite = WorkflowNodeSuite(
+        verification_engine=verif_engine,
+        trust_binding=trust_binding,
+        repository_factory=lambda oid, user_id=None: TenantRepository(db_engine, organization_id=oid, user_id=user_id or "system"),
+    )
+    wf_service = workflow_service or WorkflowService(
+        repository_factory=lambda oid, user_id=None: TenantRepository(db_engine, organization_id=oid, user_id=user_id or "system"),
+        node_suite=node_suite,
+    )
+
     # Mount REST API and Inspection HTML views
-    api_router = get_api_router(verif_engine, repository_factory, orch)
+    api_router = get_api_router(verif_engine, repository_factory, orch, wf_service)
     views_router = get_views_router(repository_factory, t_service)
 
     app.include_router(api_router)
@@ -80,7 +93,7 @@ def create_app(
         return {
             "status": "healthy",
             "service": "sangyan-verification-engine",
-            "version": "0.4.0",
+            "version": "0.5.0",
             "sources_registered": len(src_reg.list_sources()),
         }
 

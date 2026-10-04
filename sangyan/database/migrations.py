@@ -330,9 +330,34 @@ MIGRATION_002_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_sangyan_grv_cat ON sangyan_grievance_records(category)",
 )
 
+MIGRATION_003_STATEMENTS: tuple[str, ...] = (
+    # Workflow Runs & Execution Ledger
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_workflow_runs (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        investigation_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'RUNNING',
+        current_node TEXT NOT NULL DEFAULT 'intake_node',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        checkpoint_id TEXT,
+        metadata TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_wf_org ON sangyan_workflow_runs(organization_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_wf_inv ON sangyan_workflow_runs(investigation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_wf_thread ON sangyan_workflow_runs(thread_id)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_wf_status ON sangyan_workflow_runs(status)",
+)
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_sangyan_core_tables", MIGRATION_001_STATEMENTS),
     Migration(2, "create_sangyan_correlation_and_guidance_tables", MIGRATION_002_STATEMENTS),
+    Migration(3, "create_sangyan_workflow_runs_table", MIGRATION_003_STATEMENTS),
 )
 
 
