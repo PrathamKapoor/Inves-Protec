@@ -195,13 +195,13 @@ ClaimVerificationEngine.verify_claims(...)      sangyan/verification/engine.py
 | Phase 3 Verification Test Suite | 18 verification tests (adapters, conflict resolution, PQC trust, cross-tenant isolation, adversarial evasion) | `tests/test_verification.py` | 3ecb832 | D-014..D-021 |
 | Phase 3 Hardening & Evasion Defense | Multi-domain threat precedence, disclaimer evasion defense, adapter fault resilience, thread safety, and 8 new tests (total 90 tests) | `sangyan/verification/`, `tests/test_verification.py` | d60429c | D-022 |
 | End-to-End Investigation Orchestration | Lookbehind clause splitting regex, transactional persistence, verify_content_item(), InvestigationReport, and 2 E2E tests (total 92 tests) | `sangyan/intelligence/`, `sangyan/verification/`, `tests/test_verification.py` | 8754f62 | D-023 |
-| Market Infrastructure Verification | Verify NSE, BSE, MCX trading members and NSDL, CDSL depositories with disciplinary status handling | `sangyan/verification/adapters/market_infrastructure.py`, `sangyan/verification/snapshots.py` | Pending | D-024 |
-| Payment Destination Verification | UPI VPA verification against official broker directories, scam registries, and mismatch detection | `sangyan/verification/adapters/payment.py`, `sangyan/verification/snapshots.py` | Pending | D-025 |
-| Evidentiary Provenance & Quality Metrics | Multi-dimensional quality metrics, raw/normalized values, and immutable SHA3-256 digests in Evidence | `sangyan/domain/models.py`, `sangyan/verification/engine.py` | Pending | D-026 |
-| Chained Audit Ledger | Tamper-evident SHA3-256 chained audit trail with cryptographic log integrity and tenant scoping | `sangyan/domain/models.py`, `sangyan/tenancy/repository.py`, `sangyan/verification/engine.py` | Pending | D-027 |
-| Verification REST API & Routes | FastAPI endpoints for claims, content verification, investigations, sources, and audit logs | `sangyan/api/routes.py`, `sangyan/api/app.py` | Pending | D-028 |
-| Human Inspection HTML Views | Server-rendered audit views with side-by-side conflicting evidence and Section 40 banner | `sangyan/api/views.py` | Pending | D-029 |
-| Extended Verification & API Tests | 18 new unit and integration tests bringing suite to 110 passed | `tests/test_verification_extended.py`, `tests/test_api.py` | Pending | D-024..D-029 |
+| Market Infrastructure Verification | Verify NSE, BSE, MCX trading members and NSDL, CDSL depositories with disciplinary status handling | `sangyan/verification/adapters/market_infrastructure.py`, `sangyan/verification/snapshots.py` | a0766f5 | D-024 |
+| Payment Destination Verification | UPI VPA verification against official broker directories, scam registries, and mismatch detection | `sangyan/verification/adapters/payment.py`, `sangyan/verification/snapshots.py` | a0766f5 | D-025 |
+| Evidentiary Provenance & Quality Metrics | Multi-dimensional quality metrics, raw/normalized values, and immutable SHA3-256 digests in Evidence | `sangyan/domain/models.py`, `sangyan/verification/engine.py` | a0766f5 | D-026 |
+| Chained Audit Ledger | Tamper-evident SHA3-256 chained audit trail with cryptographic log integrity and tenant scoping | `sangyan/domain/models.py`, `sangyan/tenancy/repository.py`, `sangyan/verification/engine.py` | a0766f5 | D-027 |
+| Verification REST API & Routes | FastAPI endpoints for claims, content verification, investigations, sources, and audit logs | `sangyan/api/routes.py`, `sangyan/api/app.py` | a0766f5 | D-028 |
+| Human Inspection HTML Views | Server-rendered audit views with side-by-side conflicting evidence and Section 40 banner | `sangyan/api/views.py` | a0766f5 | D-029 |
+| Extended Verification & API Tests | 18 new unit and integration tests bringing suite to 110 passed | `tests/test_verification_extended.py`, `tests/test_api.py` | a0766f5 | D-024..D-029 |
 
 
 
