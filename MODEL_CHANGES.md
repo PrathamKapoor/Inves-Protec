@@ -45,7 +45,7 @@ The verification subsystem interacts with six core domain entities defined in `s
 ### 2.4 `Evidence`
 - **Purpose**: An immutable piece of factual data retrieved from an authoritative source.
 - **Key Fields**:
-  - `evidence_id`: Unique identifier.
+  - `evidence_id`: Unique identifier (UUID4 format).
   - `claim_id`: Linked claim identifier.
   - `source_id`: Authoritative source identifier.
   - `title`: Descriptive evidence heading.
@@ -54,6 +54,15 @@ The verification subsystem interacts with six core domain entities defined in `s
   - `content_hash`: SHA3-256 canonical hash of the excerpt and metadata.
   - `confidence_vector`: Multi-dimensional confidence vector.
   - `tenant_id`: Scoped tenant identifier.
+  - `source_record_id`: Registry record ID (e.g., member code, DP ID, VPA, certificate number).
+  - `source_url`: URL or snapshot reference where the evidence was acquired.
+  - `effective_from`: ISO date or timestamp when the record became valid.
+  - `effective_until`: ISO date or timestamp when the record expires or was revoked.
+  - `evidence_type`: Classification of evidence (`registry_record`, `circular_text`, `whois_record`, `payment_directory`).
+  - `provenance`: Dict capturing `source_authority`, `snapshot_version`, `snapshot_hash`, and `retrieved_at`.
+  - `raw_value`: Original excerpt string or record dictionary prior to normalization.
+  - `normalized_value`: Normalized, canonicalized representation (e.g. lowercase VPA, uppercase CIN).
+  - `quality`: Multi-dimensional quality metrics dict (`freshness`, `completeness`, `extraction_confidence`, `authority_tier`).
 
 ### 2.5 `Finding`
 - **Purpose**: Synthesized factual determination concluding the verification of a claim.
@@ -162,4 +171,11 @@ Financial claim verification uses five mutually exclusive stances (`ClaimStatus`
 
 6. **Fault-Resilient Adapter Isolation**:
    Exceptions thrown during adapter execution are contained per adapter, logging `source_unavailable` or `error` outcomes without crashing the pipeline. In-memory caching and rate limiting are fully thread-safe.
+
+7. **Tamper-Evident Chained Audit Ledger**:
+   All verification actions automatically append to a tenant-scoped audit ledger. Each `AuditEvent` links to its predecessor via SHA3-256 hash chaining. Any retrospective deletion, modification, or reordering of audit events breaks the cryptographic chain and is immediately detectable.
+
+8. **Section 40 Mandatory Absence-of-Evidence Safeguard**:
+   For claims resolved as `INSUFFICIENT_EVIDENCE`, human inspection views prominently render the mandatory statutory notice:
+   *"Absence of evidence is not proof of fraud or non-compliance. Verification was unable to locate authoritative regulatory records for the specified identifiers within available registries."*
 

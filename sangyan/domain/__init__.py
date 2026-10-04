@@ -12,6 +12,7 @@ from sangyan.domain.models import (
     REVIEW_ACTIONS,
     SIGNAL_TYPES,
     ActionGuidance,
+    AuditEvent,
     Claim,
     ConfidenceVector,
     ContentItem,
@@ -50,4 +51,6 @@ __all__ = [
     "ActionGuidance",
     "Investigation",
     "Review",
+    "AuditEvent",
 ]
+

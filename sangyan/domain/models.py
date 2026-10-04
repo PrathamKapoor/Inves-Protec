@@ -413,6 +413,96 @@ class Evidence:
     metadata: dict[str, Any] = field(default_factory=dict)
     schema_version: int = CURRENT_SCHEMA_VERSION
 
+    @property
+    def tenant_id(self) -> str:
+        return self.metadata.get("tenant_id", "")
+
+    @tenant_id.setter
+    def tenant_id(self, val: str) -> None:
+        self.metadata["tenant_id"] = val
+
+    @property
+    def source_record_id(self) -> str:
+        return self.metadata.get("source_record_id", "")
+
+    @source_record_id.setter
+    def source_record_id(self, val: str) -> None:
+        self.metadata["source_record_id"] = val
+
+    @property
+    def source_url(self) -> str:
+        return self.metadata.get("source_url", "")
+
+    @source_url.setter
+    def source_url(self, val: str) -> None:
+        self.metadata["source_url"] = val
+
+    @property
+    def effective_from(self) -> Optional[float]:
+        return self.metadata.get("effective_from")
+
+    @effective_from.setter
+    def effective_from(self, val: Optional[float]) -> None:
+        self.metadata["effective_from"] = val
+
+    @property
+    def effective_until(self) -> Optional[float]:
+        return self.metadata.get("effective_until")
+
+    @effective_until.setter
+    def effective_until(self, val: Optional[float]) -> None:
+        self.metadata["effective_until"] = val
+
+    @property
+    def evidence_type(self) -> str:
+        return self.metadata.get("evidence_type", "REGISTRY_RECORD")
+
+    @evidence_type.setter
+    def evidence_type(self, val: str) -> None:
+        self.metadata["evidence_type"] = val
+
+    @property
+    def provenance(self) -> str:
+        return self.metadata.get("provenance", "STATUTORY_REGISTRY_SNAPSHOT")
+
+    @provenance.setter
+    def provenance(self, val: str) -> None:
+        self.metadata["provenance"] = val
+
+    @property
+    def raw_value(self) -> str:
+        return self.metadata.get("raw_value", "")
+
+    @raw_value.setter
+    def raw_value(self, val: str) -> None:
+        self.metadata["raw_value"] = val
+
+    @property
+    def normalized_value(self) -> str:
+        return self.metadata.get("normalized_value", "")
+
+    @normalized_value.setter
+    def normalized_value(self, val: str) -> None:
+        self.metadata["normalized_value"] = val
+
+    @property
+    def verification_metadata(self) -> dict[str, Any]:
+        return self.metadata
+
+    @property
+    def quality(self) -> dict[str, float]:
+        """Multi-dimensional evidence quality: authority, freshness, directness, specificity, completeness."""
+        return self.metadata.get(
+            "quality",
+            {
+                "authority": 1.0 if self.source_id.startswith("src_sebi") or self.source_id.startswith("src_mca") else 0.9,
+                "freshness": 0.95,
+                "directness": 1.0 if self.stance in {"SUPPORTS", "CONTRADICTS"} else 0.5,
+                "specificity": 0.95 if self.structured_fact else 0.8,
+                "completeness": 0.9,
+            },
+        )
+
     def validate(self) -> list[str]:
         errors: list[str] = []
         require(bool(self.id), "id is required", errors)
@@ -455,6 +545,7 @@ class Evidence:
             metadata=dict(d.get("metadata", {})),
             schema_version=int(d.get("schema_version", CURRENT_SCHEMA_VERSION)),
         )
+
 
 
 # ---------------------------------------------------------------------------
@@ -765,7 +856,53 @@ class Review:
             finding_id=d.get("finding_id"),
             reason=d.get("reason", ""),
             occurred_at=float(d.get("occurred_at", time.time())),
-            previous_revision_id=d.get("previous_revision_id"),
             metadata=dict(d.get("metadata", {})),
             schema_version=int(d.get("schema_version", CURRENT_SCHEMA_VERSION)),
         )
+
+
+# ---------------------------------------------------------------------------
+# 11. AuditEvent
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AuditEvent:
+    """Tamper-evident record of a system, analyst, or verification operation."""
+
+    event_id: str
+    actor: str
+    action: str
+    resource: str
+    result: str
+    id: str = field(default_factory=lambda: new_id("audit"))
+    timestamp: float = field(default_factory=time.time)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    ledger_hash: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "event_id": self.event_id,
+            "timestamp": self.timestamp,
+            "actor": self.actor,
+            "action": self.action,
+            "resource": self.resource,
+            "result": self.result,
+            "metadata": dict(self.metadata),
+            "ledger_hash": self.ledger_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "AuditEvent":
+        return cls(
+            event_id=d["event_id"],
+            actor=d["actor"],
+            action=d["action"],
+            resource=d["resource"],
+            result=d["result"],
+            id=d.get("id") or new_id("audit"),
+            timestamp=float(d.get("timestamp", time.time())),
+            metadata=dict(d.get("metadata", {})),
+            ledger_hash=d.get("ledger_hash", ""),
+        )
+

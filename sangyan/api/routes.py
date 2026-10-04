@@ -1,0 +1,210 @@
+"""REST API routes for authoritative verification, evidence retrieval, and findings."""
+from __future__ import annotations
+
+import time
+from typing import Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+
+from sangyan.core.errors import DomainValidationError, NotFoundError, PermissionDeniedError
+from sangyan.domain.models import Claim, ContentItem
+from sangyan.verification.engine import ClaimVerificationEngine, InvestigationReport, VerificationOutcome
+from sangyan.verification.sources import AuthoritativeSourceMetadata
+
+
+class ClaimVerifyRequest(BaseModel):
+    statement: str = Field(..., min_length=3, description="Assertion text to verify against authoritative registries")
+    claim_type: str = Field(default="regulatory", description="regulatory, return, urgency, payment, affiliation, or other")
+    organization_id: Optional[str] = Field(default=None, description="Tenant organization ID")
+    user_id: Optional[str] = Field(default=None, description="Authenticated user identifier")
+
+
+class ContentVerifyRequest(BaseModel):
+    raw_content: str = Field(..., min_length=1, description="Message body or URL content to analyze and verify")
+    content_type: str = Field(default="text", description="text or url")
+    source_url: Optional[str] = Field(default="", description="Target URL if content_type is url")
+    organization_id: Optional[str] = Field(default=None, description="Tenant organization ID")
+    user_id: Optional[str] = Field(default=None, description="Authenticated user identifier")
+
+
+def get_api_router(
+    engine: ClaimVerificationEngine,
+    repository_factory: Optional[Any] = None,
+) -> APIRouter:
+    """Build FastAPI router configured with verification engine and tenancy repository."""
+    router = APIRouter(prefix="/api/v1", tags=["verification"])
+
+    def _get_repo(org_id: Optional[str], usr_id: Optional[str]):
+        if repository_factory and org_id and usr_id:
+            try:
+                return repository_factory(org_id, usr_id)
+            except Exception as e:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        return None
+
+    @router.post("/verify/claim", response_model=dict[str, Any])
+    def verify_single_claim(req: ClaimVerifyRequest):
+        """Verify an isolated atomic assertion against authoritative institutional registries."""
+        repo = _get_repo(req.organization_id, req.user_id)
+        content_item_id = "ad_hoc_claim"
+        if repo:
+            try:
+                item = ContentItem(
+                    organization_id=repo.organization_id,
+                    content_type="text",
+                    raw_content=req.statement,
+                )
+                content_item_id = repo.save_content_item(item)
+            except Exception:
+                pass
+
+        claim = Claim(
+            content_item_id=content_item_id,
+            statement=req.statement,
+            claim_type=req.claim_type,
+        )
+        if repo:
+            try:
+                repo.save_claim(claim)
+            except Exception:
+                pass
+
+        outcome = engine.verify_claim(claim, repository=repo)
+        return outcome.to_dict()
+
+    @router.post("/verify/content", response_model=dict[str, Any])
+    def verify_content(req: ContentVerifyRequest):
+        """End-to-end investigation pipeline: intelligence decomposition, multi-adapter verification, and trust receipts."""
+        repo = _get_repo(req.organization_id, req.user_id)
+        org_id = repo.organization_id if repo else (req.organization_id or "default_org")
+
+        # Ingestion handling
+        item = ContentItem(
+            organization_id=org_id,
+            content_type=req.content_type,
+            raw_content=req.raw_content,
+            source_url=req.source_url or "",
+        )
+        if repo:
+            try:
+                repo.save_content_item(item)
+            except Exception as e:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+        report = engine.verify_content_item(item, repository=repo, user_id=req.user_id)
+        return report.to_dict()
+
+    @router.get("/investigations/{investigation_id}", response_model=dict[str, Any])
+    def get_investigation(
+        investigation_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """Retrieve full investigation details including linked claims, entities, signals, and findings."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication and tenant context required")
+        try:
+            inv = repo.get_investigation(investigation_id)
+            return inv.to_dict()
+        except NotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found")
+        except PermissionDeniedError as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+    @router.get("/claims/{claim_id}", response_model=dict[str, Any])
+    def get_claim(
+        claim_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """Fetch individual claim by ID."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        try:
+            c = repo.get_claim(claim_id)
+            return c.to_dict()
+        except NotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found")
+
+    @router.get("/claims/{claim_id}/evidence", response_model=list[dict[str, Any]])
+    def list_claim_evidence(
+        claim_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """List all authoritative evidence items retrieved for a claim."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        try:
+            evidence_items = repo.list_evidence_for_claim(claim_id)
+            return [e.to_dict() for e in evidence_items]
+        except NotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found")
+
+    @router.get("/claims/{claim_id}/findings", response_model=list[dict[str, Any]])
+    def list_claim_findings(
+        claim_id: str,
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+    ):
+        """List all synthesized verification findings for a claim."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        try:
+            findings = repo.list_findings_for_claim(claim_id)
+            return [f.to_dict() for f in findings]
+        except NotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Claim not found")
+
+    @router.get("/sources", response_model=list[dict[str, Any]])
+    def list_authoritative_sources(
+        claim_type: Optional[str] = None,
+        authority_tier: Optional[str] = None,
+        authority: Optional[str] = None,
+    ):
+        """List all controlled authoritative institutional sources registered in SANGYAN."""
+        sources = engine.registry.list_sources(
+            claim_type=claim_type,
+            authority_tier=authority_tier,
+            authority=authority,
+        )
+        return [
+            {
+                "source_id": s.source_id,
+                "name": s.name,
+                "authority_tier": s.authority_tier,
+                "source_type": s.source_type,
+                "authority": s.authority,
+                "provenance_policy": s.provenance_policy,
+                "base_url": s.base_url,
+                "allowed_domains": s.allowed_domains,
+                "supported_claim_types": s.supported_claim_types,
+                "retrieval_method": s.retrieval_method,
+                "mode": s.mode,
+                "version": s.version,
+                "enabled": s.enabled,
+                "description": s.description,
+            }
+            for s in sources
+        ]
+
+    @router.get("/audit/events", response_model=list[dict[str, Any]])
+    def list_audit_events(
+        organization_id: str = Query(...),
+        user_id: str = Query(...),
+        action: Optional[str] = None,
+        limit: int = 100,
+    ):
+        """Query tamper-evident audit ledger events for the active tenant."""
+        repo = _get_repo(organization_id, user_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        events = repo.list_audit_events(limit=limit, action=action)
+        return [e.to_dict() for e in events]
+
+    return router

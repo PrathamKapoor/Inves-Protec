@@ -19,6 +19,9 @@ class AuthoritativeSourceMetadata:
     allowed_domains: list[str]
     supported_claim_types: list[str]
     retrieval_method: str  # "SNAPSHOT", "LIVE_API", "HTTP_SCRAPE"
+    source_type: str = "REGULATOR_REGISTRY"  # REGULATOR_REGISTRY, EXCHANGE_DIRECTORY, CORPORATE_REGISTRY, STATUTORY_CIRCULAR, OFFICIAL_DOMAINS, PAYMENT_DIRECTORY, DEPOSITORY_REGISTRY
+    authority: str = "SEBI"  # SEBI, MCA, RBI, NSE, BSE, MCX, NSDL, CDSL, NPCI, IRDAI
+    provenance_policy: str = "STATUTORY_MANDATE"  # STATUTORY_MANDATE, REGULATORY_FILING, CRYPTOGRAPHIC_SNAPSHOT, OFFICIAL_GAZETTE
     freshness_policy_sec: int = 86400  # Default 24 hours
     mode: str = "SNAPSHOT"  # "LIVE", "SNAPSHOT", "TEST", "UNAVAILABLE"
     enabled: bool = True
@@ -43,6 +46,9 @@ class AuthoritativeSourceMetadata:
                 "allowed_domains": self.allowed_domains,
                 "supported_claim_types": self.supported_claim_types,
                 "retrieval_method": self.retrieval_method,
+                "source_type": self.source_type,
+                "authority": self.authority,
+                "provenance_policy": self.provenance_policy,
                 "mode": self.mode,
                 "version": self.version,
                 "content_hash": self.content_hash,
@@ -61,6 +67,9 @@ SEED_AUTHORITATIVE_SOURCES: list[AuthoritativeSourceMetadata] = [
         allowed_domains=["sebi.gov.in", "www.sebi.gov.in"],
         supported_claim_types=["regulatory", "affiliation"],
         retrieval_method="SNAPSHOT",
+        source_type="REGULATOR_REGISTRY",
+        authority="SEBI",
+        provenance_policy="STATUTORY_MANDATE",
         freshness_policy_sec=86400,
         mode="SNAPSHOT",
         description="Official statutory registry of SEBI-registered stock brokers, investment advisers, and research analysts.",
@@ -74,6 +83,9 @@ SEED_AUTHORITATIVE_SOURCES: list[AuthoritativeSourceMetadata] = [
         allowed_domains=["sebi.gov.in", "www.sebi.gov.in"],
         supported_claim_types=["return", "regulatory", "urgency", "payment"],
         retrieval_method="SNAPSHOT",
+        source_type="STATUTORY_CIRCULAR",
+        authority="SEBI",
+        provenance_policy="OFFICIAL_GAZETTE",
         freshness_policy_sec=604800,  # 7 days
         mode="SNAPSHOT",
         description="Official circulars prohibiting guaranteed returns, unauthorized advisory, and fraudulent schemes.",
@@ -87,6 +99,9 @@ SEED_AUTHORITATIVE_SOURCES: list[AuthoritativeSourceMetadata] = [
         allowed_domains=["mca.gov.in", "www.mca.gov.in"],
         supported_claim_types=["regulatory", "affiliation"],
         retrieval_method="SNAPSHOT",
+        source_type="CORPORATE_REGISTRY",
+        authority="MCA",
+        provenance_policy="STATUTORY_MANDATE",
         freshness_policy_sec=86400,
         mode="SNAPSHOT",
         description="Statutory register of incorporated companies, CINs, and registration statuses in India.",
@@ -100,6 +115,9 @@ SEED_AUTHORITATIVE_SOURCES: list[AuthoritativeSourceMetadata] = [
         allowed_domains=["nseindia.com", "www.nseindia.com"],
         supported_claim_types=["regulatory", "affiliation"],
         retrieval_method="SNAPSHOT",
+        source_type="EXCHANGE_DIRECTORY",
+        authority="NSE",
+        provenance_policy="REGULATORY_FILING",
         freshness_policy_sec=86400,
         mode="SNAPSHOT",
         description="Recognized stock exchange member directory of active trading and clearing members.",
@@ -113,9 +131,60 @@ SEED_AUTHORITATIVE_SOURCES: list[AuthoritativeSourceMetadata] = [
         allowed_domains=["bseindia.com", "www.bseindia.com"],
         supported_claim_types=["regulatory", "affiliation"],
         retrieval_method="SNAPSHOT",
+        source_type="EXCHANGE_DIRECTORY",
+        authority="BSE",
+        provenance_policy="REGULATORY_FILING",
         freshness_policy_sec=86400,
         mode="SNAPSHOT",
         description="Recognized stock exchange member directory of active BSE brokers and participants.",
+        version="2026.Q1",
+    ),
+    AuthoritativeSourceMetadata(
+        source_id="src_mcx_members",
+        name="Multi Commodity Exchange of India (MCX) Member Directory",
+        authority_tier="T1_INFRASTRUCTURE",
+        base_url="https://www.mcxindia.com/membership/membership-directory",
+        allowed_domains=["mcxindia.com", "www.mcxindia.com"],
+        supported_claim_types=["regulatory", "affiliation"],
+        retrieval_method="SNAPSHOT",
+        source_type="EXCHANGE_DIRECTORY",
+        authority="MCX",
+        provenance_policy="REGULATORY_FILING",
+        freshness_policy_sec=86400,
+        mode="SNAPSHOT",
+        description="Statutory directory of active commodity derivatives trading and clearing members.",
+        version="2026.Q1",
+    ),
+    AuthoritativeSourceMetadata(
+        source_id="src_nsdl_depositories",
+        name="National Securities Depository Limited (NSDL) Participants Directory",
+        authority_tier="T1_INFRASTRUCTURE",
+        base_url="https://nsdl.co.in/dplist/dplist.php",
+        allowed_domains=["nsdl.co.in", "www.nsdl.co.in"],
+        supported_claim_types=["regulatory", "affiliation"],
+        retrieval_method="SNAPSHOT",
+        source_type="DEPOSITORY_REGISTRY",
+        authority="NSDL",
+        provenance_policy="REGULATORY_FILING",
+        freshness_policy_sec=86400,
+        mode="SNAPSHOT",
+        description="Statutory directory of registered Depository Participants holding client demat accounts.",
+        version="2026.Q1",
+    ),
+    AuthoritativeSourceMetadata(
+        source_id="src_cdsl_depositories",
+        name="Central Depository Services (India) Limited (CDSL) Participants Directory",
+        authority_tier="T1_INFRASTRUCTURE",
+        base_url="https://www.cdslindia.com/DP/dplist.aspx",
+        allowed_domains=["cdslindia.com", "www.cdslindia.com"],
+        supported_claim_types=["regulatory", "affiliation"],
+        retrieval_method="SNAPSHOT",
+        source_type="DEPOSITORY_REGISTRY",
+        authority="CDSL",
+        provenance_policy="REGULATORY_FILING",
+        freshness_policy_sec=86400,
+        mode="SNAPSHOT",
+        description="Statutory directory of registered CDSL Depository Participants holding electronic securities.",
         version="2026.Q1",
     ),
     AuthoritativeSourceMetadata(
@@ -123,9 +192,12 @@ SEED_AUTHORITATIVE_SOURCES: list[AuthoritativeSourceMetadata] = [
         name="Authoritative Financial Domain & Intermediary URL Registry",
         authority_tier="T0_REGULATOR",
         base_url="https://www.sebi.gov.in/sebiweb/other/OtherAction.do?doRecognisedFpi=yes&intmId=13",
-        allowed_domains=["sebi.gov.in", "nseindia.com", "bseindia.com", "rbi.org.in"],
+        allowed_domains=["sebi.gov.in", "nseindia.com", "bseindia.com", "mcxindia.com", "rbi.org.in"],
         supported_claim_types=["regulatory", "affiliation", "payment", "other"],
         retrieval_method="SNAPSHOT",
+        source_type="OFFICIAL_DOMAINS",
+        authority="SEBI",
+        provenance_policy="CRYPTOGRAPHIC_SNAPSHOT",
         freshness_policy_sec=86400,
         mode="SNAPSHOT",
         description="Authoritative directory of authentic web portals, domains, and apps for registered entities.",
@@ -139,9 +211,44 @@ SEED_AUTHORITATIVE_SOURCES: list[AuthoritativeSourceMetadata] = [
         allowed_domains=["rbi.org.in", "sachet.rbi.org.in"],
         supported_claim_types=["regulatory", "payment", "other"],
         retrieval_method="SNAPSHOT",
+        source_type="REGULATOR_REGISTRY",
+        authority="RBI",
+        provenance_policy="STATUTORY_MANDATE",
         freshness_policy_sec=86400,
         mode="SNAPSHOT",
         description="Statutory register of RBI-licensed banks, NBFCs, and Sachet unauthorized deposit alerts.",
+        version="2026.Q1",
+    ),
+    AuthoritativeSourceMetadata(
+        source_id="src_upis_official",
+        name="National Payments Corporation of India (NPCI) Verified Merchant VPA Directory",
+        authority_tier="T0_REGULATOR",
+        base_url="https://www.npci.org.in/what-we-do/upi/live-members",
+        allowed_domains=["npci.org.in", "www.npci.org.in", "sebi.gov.in"],
+        supported_claim_types=["payment", "regulatory", "affiliation"],
+        retrieval_method="SNAPSHOT",
+        source_type="PAYMENT_DIRECTORY",
+        authority="NPCI",
+        provenance_policy="REGULATORY_FILING",
+        freshness_policy_sec=86400,
+        mode="SNAPSHOT",
+        description="Authoritative registry of verified corporate merchant VPAs for registered stock brokers and mutual funds.",
+        version="2026.Q1",
+    ),
+    AuthoritativeSourceMetadata(
+        source_id="src_irdai_insurers",
+        name="Insurance Regulatory and Development Authority of India (IRDAI) Registry",
+        authority_tier="T0_REGULATOR",
+        base_url="https://irdai.gov.in/list-of-insurers",
+        allowed_domains=["irdai.gov.in", "www.irdai.gov.in"],
+        supported_claim_types=["regulatory", "affiliation"],
+        retrieval_method="SNAPSHOT",
+        source_type="REGULATOR_REGISTRY",
+        authority="IRDAI",
+        provenance_policy="STATUTORY_MANDATE",
+        freshness_policy_sec=86400,
+        mode="SNAPSHOT",
+        description="Statutory registry of registered life, general, and health insurance companies in India.",
         version="2026.Q1",
     ),
 ]
@@ -168,6 +275,8 @@ class AuthoritativeSourceRegistry:
         self,
         claim_type: Optional[str] = None,
         authority_tier: Optional[str] = None,
+        source_type: Optional[str] = None,
+        authority: Optional[str] = None,
         enabled_only: bool = True,
     ) -> list[AuthoritativeSourceMetadata]:
         """Query authoritative sources matching criteria."""
@@ -178,6 +287,10 @@ class AuthoritativeSourceRegistry:
             if claim_type and claim_type not in src.supported_claim_types:
                 continue
             if authority_tier and src.authority_tier != authority_tier:
+                continue
+            if source_type and src.source_type != source_type:
+                continue
+            if authority and src.authority != authority:
                 continue
             results.append(src)
         return results

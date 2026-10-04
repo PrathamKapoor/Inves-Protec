@@ -349,6 +349,108 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Full end-to-end investigation pipeline executable via a single call, verified by 2 comprehensive end-to-end integration tests. Total test suite reaches 92 passed tests.
 - Files: `sangyan/intelligence/claims.py`, `sangyan/intelligence/pipeline.py`, `sangyan/verification/adapters/circulars.py`, `sangyan/verification/engine.py`, `tests/test_verification.py`
 
+---
+
+### D-024: Authoritative Source Registry Metadata Expansion & Indian Infrastructure
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Prompt Section 7 requires authoritative source governance metadata explicitly tracking `source_type`, `authority`, and `provenance_policy`, and Section 8 requires expanding coverage across Indian financial infrastructure (MCX, NSDL, CDSL, NPCI, IRDAI).
+- Decision:
+  1. Expanded `AuthoritativeSourceMetadata` with `source_type` (`REGULATOR_REGISTRY`, `EXCHANGE_DIRECTORY`, `CORPORATE_REGISTRY`, `STATUTORY_CIRCULAR`, `OFFICIAL_DOMAINS`, `PAYMENT_DIRECTORY`, `DEPOSITORY_REGISTRY`), `authority` (`SEBI`, `MCA`, `RBI`, `NSE`, `BSE`, `MCX`, `NSDL`, `CDSL`, `NPCI`, `IRDAI`), and `provenance_policy` (`STATUTORY_MANDATE`, `REGULATORY_FILING`, `CRYPTOGRAPHIC_SNAPSHOT`, `OFFICIAL_GAZETTE`).
+  2. Registered seed sources for `src_mcx_members` (MCX), `src_nsdl_depositories` (NSDL), `src_cdsl_depositories` (CDSL), `src_upis_official` (NPCI), and `src_irdai_insurers` (IRDAI).
+  3. Added multi-attribute filtering by `source_type` and `authority` in `AuthoritativeSourceRegistry.list_sources()`.
+- Why: Provides complete governance tracking, domain allowlisting, and provenance policies for Indian capital market regulators and market infrastructure entities.
+- Alternatives considered: Dynamic schema dictionaries (rejected: lacks static type guarantees and validation).
+- Consequences: All authoritative sources possess strict governance metadata and explicit authority tiers.
+- Files: `sangyan/verification/sources.py`, `tests/test_api.py`
+
+---
+
+### D-025: Market Infrastructure & Depository Participant Verification (NSE, BSE, MCX, NSDL, CDSL)
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Fraudulent investment solicitations frequently impersonate recognized stock exchange members, clearing members, or depository participants (e.g. claiming fake member IDs on NSE or BSE). The system must deterministically verify these assertions against official member directories.
+- Decision: Implemented `MarketInfrastructureVerificationAdapter` (`sangyan/verification/adapters/market_infrastructure.py`) backed by `src_market_infrastructure` versioned snapshots:
+  1. Verifies exchange member IDs and DP IDs across NSE, BSE, MCX, NSDL, and CDSL.
+  2. Distinguishes active, expired, suspended, and expelled/defaulter statuses.
+  3. Enforces epistemic precedence: Disciplinary expulsion/defaulter orders (e.g. Karvy NSE ID `08035`) strictly yield `CONTRADICTED` prior to natural date expiry (`OUTDATED`).
+  4. Bogus claimed member IDs not present in directories yield `CONTRADICTED` with `not_found` status.
+  5. Distinguishes legitimate market infrastructure advisories (hard-negative suppression on "NSE cautions...").
+- Why: Directly fulfills prompt Section 8 for market infrastructure verification and prevents expelled or unregistered brokers from operating under legitimate exchange banners.
+- Alternatives considered: Merging market infrastructure lookups into `SEBIVerificationAdapter` (rejected: violates single-responsibility principle; exchange member IDs differ from statutory SEBI registration formats).
+- Consequences: Trading member and DP claims are evaluated against authoritative market infrastructure directories.
+- Files: `sangyan/verification/adapters/market_infrastructure.py`, `sangyan/verification/snapshots.py`, `tests/test_verification_extended.py`
+
+---
+
+### D-026: UPI Payment Destination & Corporate Mismatch Verification
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Real-world investment scams solicit funds into personal UPI accounts (e.g. `@paytm`, `@ybl`) while masquerading as registered corporate brokers or SEBI advisers. Prompt Section 34 mandates verifying payment identifiers, detecting mismatches, and returning `INSUFFICIENT_EVIDENCE` for unfamiliar VPAs without falsely declaring fraud.
+- Decision: Implemented `UPIPaymentVerificationAdapter` (`sangyan/verification/adapters/payment.py`):
+  1. Validates payment VPAs against `src_upis_official` verified merchant registry.
+  2. Identifies official corporate VPAs for registered brokers (e.g. `zerodha.pay@okhdfcbank`, `groww@icici`) and emits `SUPPORTED`.
+  3. Matches against blacklisted fraudulent/cybercrime-reported VPAs (e.g. `fastprofit24@paytm`) and emits `CONTRADICTED`.
+  4. Detects corporate mismatch: When content mentions a recognized broker brand (e.g. Zerodha, Groww) or statutory authority (SEBI) but requests payment to a personal VPA pattern, emits `CONTRADICTED` citing SEBI circular bans on personal fund transfers.
+  5. Safe epistemic default: An unfamiliar VPA with no contradiction or impersonation returns `INSUFFICIENT_EVIDENCE`, ensuring absence of evidence is not conflated with fraud.
+- Why: Protects retail investors from unauthorized third-party payment diversions while adhering to supervisory epistemic standards.
+- Alternatives considered: Regex-only VPA format checking (rejected: cannot detect legitimate corporate vs personal account mismatches).
+- Consequences: Clear, defensible determinations on payment solicitation claims.
+- Files: `sangyan/verification/adapters/payment.py`, `sangyan/verification/snapshots.py`, `tests/test_verification_extended.py`
+
+---
+
+### D-027: Evidence Provenance, Quality Dimensions, and Value Normalization
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Prompt Section 11, 14, and 36 require Evidence domain models to track tenant ownership, source record IDs, source URLs, effective validity intervals, evidence types, provenance policies, raw vs normalized values, and multi-dimensional quality scores without breaking existing database schemas.
+- Decision: Enhanced `Evidence` domain dataclass (`sangyan/domain/models.py`) with typed accessors:
+  1. Added `tenant_id`, `source_record_id`, `source_url`, `effective_from`, `effective_until`, `evidence_type`, and `provenance`.
+  2. Preserved original assertion as `raw_value` while capturing canonical registry entry as `normalized_value`.
+  3. Structured multi-dimensional `quality` vector capturing `authority`, `freshness`, `directness`, `specificity`, and `completeness`.
+  4. Retained 100% backward compatibility with database schema and existing test suites via JSON metadata mapping.
+- Why: Provides full cryptographic and evidentiary traceability from user assertion to verbatim registry certificate.
+- Alternatives considered: Modifying SQL migration schema (rejected: would force breaking changes onto existing databases when metadata encapsulation cleanly satisfies the requirement).
+- Consequences: Every evidence item carries rich audit and quality provenance.
+- Files: `sangyan/domain/models.py`, `sangyan/verification/engine.py`
+
+---
+
+### D-028: Authoritative Verification Audit Logging & Chained SHA3-256 Ledger
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Prompt Section 38 mandates producing audit events for all verification operations, recording tenant, claim, source, adapter, timestamp, result, evidence, and failure without logging secrets.
+- Decision:
+  1. Defined `AuditEvent` domain model (`sangyan/domain/models.py`).
+  2. Implemented `record_audit_event()` and `list_audit_events()` on `TenantRepository` backed by `sangyan_audit_events`.
+  3. Chained consecutive audit events with canonical SHA3-256 ledger hashes (`prev_hash:event_id:actor:action:resource:result:timestamp`), making audit log tampering or deletion cryptographically detectable.
+  4. Automated audit event emission inside `ClaimVerificationEngine.verify_claim()` and `verify_content_item()`.
+  5. Enforced tenant isolation on all audit queries.
+- Why: Guarantees immutable, tamper-evident forensic records of all platform determinations.
+- Alternatives considered: Standard Python logger only (rejected: ephemeral, not queryable by tenants, lacks cryptographic chaining).
+- Consequences: Institutional investigators can inspect a verifiable audit ledger of all verification actions.
+- Files: `sangyan/domain/models.py`, `sangyan/tenancy/repository.py`, `sangyan/verification/engine.py`, `tests/test_verification_extended.py`
+
+---
+
+### D-029: Verification REST API & Human Audit Inspection Views
+- Date / phase / commit: 2026-10-04, Phase 3
+- Context: Prompt Sections 39, 40, and 41 require exposing verification capabilities through clean REST APIs and lightweight, human-auditable inspection views without overbuilding a complex frontend.
+- Decision: Created `sangyan.api` module (`sangyan/api/app.py`, `sangyan/api/routes.py`, `sangyan/api/views.py`):
+  1. REST API endpoints:
+     - `POST /api/v1/verify/claim`: Single atomic assertion verification.
+     - `POST /api/v1/verify/content`: Full intelligence, multi-adapter verification, and trust receipt pipeline.
+     - `GET /api/v1/investigations/{id}`: Investigation envelope with claims, entities, signals, and findings.
+     - `GET /api/v1/claims/{id}/evidence`: List authoritative evidence items.
+     - `GET /api/v1/claims/{id}/findings`: List synthesized findings.
+     - `GET /api/v1/sources`: Registered institutional registries and allowlists.
+     - `GET /api/v1/audit/events`: Query tenant audit events.
+  2. HTML Inspection Views (`/inspect/claim/{id}` and `/inspect/investigation/{id}`):
+     - Renders claim text, epistemic stance badges, and verbatim evidence excerpts with SHA3-256 hashes.
+     - Mandatory Section 40 Banner: Prominently displays "INSUFFICIENT EVIDENCE: No authoritative record was found. This does NOT establish that the claim is false."
+     - Conflicting Display: Renders side-by-side cards comparing opposing authoritative evidence (Source A vs Source B) when discrepancies exist.
+     - Anchored by ML-DSA-65 post-quantum trust receipt status.
+- Why: Empowers human analysts and institutional regulators to review, understand, and audit machine determinations with total transparency.
+- Alternatives considered: Heavy React/Next.js dashboard (rejected: prompt Section 41 explicitly forbids overbuilding UI during Phase 3).
+- Consequences: Ready-to-deploy FastAPI application providing both machine-readable JSON contracts and human-readable audit views.
+- Files: `sangyan/api/app.py`, `sangyan/api/routes.py`, `sangyan/api/views.py`, `tests/test_api.py`
+
+
 
 
 

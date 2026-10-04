@@ -9,6 +9,7 @@ from sangyan.database.engine import DatabaseEngine
 from sangyan.domain.base import new_id
 from sangyan.domain.models import (
     ActionGuidance,
+    AuditEvent,
     Claim,
     ConfidenceVector,
     ContentItem,
@@ -906,3 +907,83 @@ class TenantRepository:
             )
             for r in rows
         ]
+
+    # -----------------------------------------------------------------------
+    # Audit Events
+    # -----------------------------------------------------------------------
+
+    def record_audit_event(
+        self,
+        action: str,
+        resource: str,
+        result: str,
+        metadata: dict | None = None,
+    ) -> str:
+        """Record a tamper-evident audit event with SHA3-256 chained ledger hashing."""
+        self._require_permission("investigation:create")
+        now = time.time()
+        audit_id = new_id("audit")
+        event_id = f"evt_{int(now * 1000)}_{audit_id[-8:]}"
+        meta = dict(metadata or {})
+        # Enforce tenant isolation by binding organization_id to metadata
+        meta["organization_id"] = self.organization_id
+
+        # Compute chained ledger hash from last audit event
+        last_row = self._db.query_one("SELECT ledger_hash FROM sangyan_audit_events ORDER BY timestamp DESC, id DESC LIMIT 1")
+        prev_hash = last_row["ledger_hash"] if last_row and last_row.get("ledger_hash") else "0" * 64
+
+        from sangyan.crypto.hashing import sha3_hex
+        raw_ledger = f"{prev_hash}:{event_id}:{self.user_id}:{action}:{resource}:{result}:{now}"
+        ledger_hash = sha3_hex(raw_ledger.encode("utf-8"))
+
+        self._db.execute(
+            """
+            INSERT INTO sangyan_audit_events
+            (id, event_id, timestamp, actor, action, resource, result, metadata, ledger_hash)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                audit_id,
+                event_id,
+                now,
+                self.user_id,
+                action,
+                resource,
+                result,
+                json.dumps(meta),
+                ledger_hash,
+            ),
+        )
+        return audit_id
+
+    def list_audit_events(
+        self,
+        limit: int = 100,
+        action: str | None = None,
+    ) -> list[AuditEvent]:
+        """List audit events scoped strictly to this tenant organization."""
+        self._require_permission("investigation:read")
+        query = "SELECT * FROM sangyan_audit_events WHERE metadata LIKE ? "
+        params: list = [f'%"organization_id": "{self.organization_id}"%']
+        if action:
+            query += "AND action = ? "
+            params.append(action)
+        query += "ORDER BY timestamp DESC LIMIT ?"
+        params.append(limit)
+
+        rows = self._db.query_all(query, tuple(params))
+        return [
+            AuditEvent(
+                id=r["id"],
+                event_id=r["event_id"],
+                timestamp=r["timestamp"],
+                actor=r["actor"],
+                action=r["action"],
+                resource=r["resource"],
+                result=r["result"],
+                metadata=json.loads(r["metadata"] or "{}"),
+                ledger_hash=r["ledger_hash"],
+            )
+            for r in rows
+        ]
+

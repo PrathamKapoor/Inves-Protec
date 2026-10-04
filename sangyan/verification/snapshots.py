@@ -323,6 +323,185 @@ _OFFICIAL_DOMAINS_RECORDS: list[dict[str, Any]] = [
     },
 ]
 
+_MARKET_INFRASTRUCTURE_RECORDS: list[dict[str, Any]] = [
+    {
+        "member_id": "13942",
+        "entity_name": "Zerodha Broking Limited",
+        "exchange": "NSE",
+        "category": "TRADING_AND_CLEARING_MEMBER",
+        "status": "ACTIVE",
+        "effective_from": 1420070400.0,
+        "valid_until": 1956441600.0,
+    },
+    {
+        "member_id": "6404",
+        "entity_name": "Zerodha Broking Limited",
+        "exchange": "BSE",
+        "category": "TRADING_AND_CLEARING_MEMBER",
+        "status": "ACTIVE",
+        "effective_from": 1420070400.0,
+        "valid_until": 1956441600.0,
+    },
+    {
+        "member_id": "46025",
+        "entity_name": "Zerodha Broking Limited",
+        "exchange": "MCX",
+        "category": "TRADING_AND_CLEARING_MEMBER",
+        "status": "ACTIVE",
+        "effective_from": 1420070400.0,
+        "valid_until": 1956441600.0,
+    },
+    {
+        "member_id": "IN-DP-CDSL-01-1999",
+        "entity_name": "Zerodha Broking Limited",
+        "exchange": "CDSL",
+        "category": "DEPOSITORY_PARTICIPANT",
+        "status": "ACTIVE",
+        "effective_from": 1420070400.0,
+        "valid_until": 1956441600.0,
+    },
+    {
+        "member_id": "90177",
+        "entity_name": "Nextbillion Technology Private Limited",
+        "trade_name": "Groww",
+        "exchange": "NSE",
+        "category": "TRADING_MEMBER",
+        "status": "ACTIVE",
+        "effective_from": 1577836800.0,
+        "valid_until": 1956441600.0,
+    },
+    {
+        "member_id": "6697",
+        "entity_name": "Nextbillion Technology Private Limited",
+        "trade_name": "Groww",
+        "exchange": "BSE",
+        "category": "TRADING_MEMBER",
+        "status": "ACTIVE",
+        "effective_from": 1577836800.0,
+        "valid_until": 1956441600.0,
+    },
+    {
+        "member_id": "IN-DP-431-2019",
+        "entity_name": "Nextbillion Technology Private Limited",
+        "trade_name": "Groww",
+        "exchange": "NSDL",
+        "category": "DEPOSITORY_PARTICIPANT",
+        "status": "ACTIVE",
+        "effective_from": 1577836800.0,
+        "valid_until": 1956441600.0,
+    },
+    {
+        "member_id": "12798",
+        "entity_name": "Angel One Limited",
+        "exchange": "NSE",
+        "category": "TRADING_AND_CLEARING_MEMBER",
+        "status": "ACTIVE",
+        "effective_from": 1483228800.0,
+        "valid_until": 1956441600.0,
+    },
+    {
+        "member_id": "612",
+        "entity_name": "Angel One Limited",
+        "exchange": "BSE",
+        "category": "TRADING_AND_CLEARING_MEMBER",
+        "status": "ACTIVE",
+        "effective_from": 1483228800.0,
+        "valid_until": 1956441600.0,
+    },
+    # Expelled / Defaulter member for negative & adversarial tests
+    {
+        "member_id": "08035",
+        "entity_name": "Karvy Stock Broking Limited",
+        "exchange": "NSE",
+        "category": "EXPELLED_DEFAULTER",
+        "status": "EXPELLED",
+        "expulsion_reason": "Declared defaulter and expelled under NSE Rules for client fund misuse",
+        "effective_from": 1009843200.0,
+        "valid_until": 1606089600.0,  # 2020-11-23
+    },
+    {
+        "member_id": "0555",
+        "entity_name": "Karvy Stock Broking Limited",
+        "exchange": "BSE",
+        "category": "EXPELLED_DEFAULTER",
+        "status": "EXPELLED",
+        "expulsion_reason": "Expelled from BSE membership pursuant to SEBI directions",
+        "effective_from": 1009843200.0,
+        "valid_until": 1606089600.0,
+    },
+    # Suspended member
+    {
+        "member_id": "99999",
+        "entity_name": "Shady Commodity Traders LLP",
+        "exchange": "MCX",
+        "category": "COMMODITY_BROKER",
+        "status": "SUSPENDED",
+        "suspension_reason": "Interim order for non-compliance with net worth requirements",
+        "effective_from": 1546300800.0,
+        "valid_until": 1798761600.0,
+    },
+]
+
+_UPI_PAYMENT_DIRECTORY_RECORDS: list[dict[str, Any]] = [
+    {
+        "vpa": "zerodha.pay@okhdfcbank",
+        "canonical_name": "Zerodha Broking Limited",
+        "entity_type": "STOCK_BROKER",
+        "vpa_type": "OFFICIAL_CORPORATE",
+        "status": "ACTIVE",
+        "allowed_intermediary": True,
+    },
+    {
+        "vpa": "groww@icici",
+        "canonical_name": "Nextbillion Technology Private Limited",
+        "trade_name": "Groww",
+        "entity_type": "STOCK_BROKER",
+        "vpa_type": "OFFICIAL_CORPORATE",
+        "status": "ACTIVE",
+        "allowed_intermediary": True,
+    },
+    {
+        "vpa": "angelone@icici",
+        "canonical_name": "Angel One Limited",
+        "entity_type": "STOCK_BROKER",
+        "vpa_type": "OFFICIAL_CORPORATE",
+        "status": "ACTIVE",
+        "allowed_intermediary": True,
+    },
+    {
+        "vpa": "upstox@hdfcbank",
+        "canonical_name": "RKSV Securities India Private Limited",
+        "trade_name": "Upstox",
+        "entity_type": "STOCK_BROKER",
+        "vpa_type": "OFFICIAL_CORPORATE",
+        "status": "ACTIVE",
+        "allowed_intermediary": True,
+    },
+    # Flagged malicious / personal scam VPAs
+    {
+        "vpa": "fastprofit24@paytm",
+        "canonical_name": "Scam Investment Channel",
+        "vpa_type": "PERSONAL_FLAGGED",
+        "status": "FLAGGED_FRAUDULENT",
+        "warning": "Reported on National Cybercrime Portal for fake stock advisory extortion",
+    },
+    {
+        "vpa": "guaranteedreturns@ybl",
+        "canonical_name": "Illegal Assured Return Scheme",
+        "vpa_type": "PERSONAL_FLAGGED",
+        "status": "FLAGGED_FRAUDULENT",
+        "warning": "Sachet portal unauthorized deposit complaint",
+    },
+    {
+        "vpa": "sebi-fund-recovery@okhdfcbank",
+        "canonical_name": "Impersonation of SEBI",
+        "vpa_type": "IMPERSONATION_FLAGGED",
+        "status": "FLAGGED_FRAUDULENT",
+        "warning": "Fake SEBI officer fund recovery fee solicitation",
+    },
+]
+
+
 
 def create_snapshot(
     source_id: str,
@@ -390,6 +569,22 @@ class SnapshotManager:
                 source_id="src_official_domains",
                 version="2026.Q1",
                 records=_OFFICIAL_DOMAINS_RECORDS,
+            )
+        )
+        # 5. Market Infrastructure (NSE, BSE, MCX, NSDL, CDSL)
+        self.register_snapshot(
+            create_snapshot(
+                source_id="src_market_infrastructure",
+                version="2026.Q1",
+                records=_MARKET_INFRASTRUCTURE_RECORDS,
+            )
+        )
+        # 6. Verified Broker UPI Directory
+        self.register_snapshot(
+            create_snapshot(
+                source_id="src_upis_official",
+                version="2026.Q1",
+                records=_UPI_PAYMENT_DIRECTORY_RECORDS,
             )
         )
 
@@ -488,3 +683,61 @@ class SnapshotManager:
                     matched_circulars.append(dict(rec))
                     break
         return matched_circulars
+
+    def lookup_market_infrastructure_member(
+        self,
+        identifier_or_name: str,
+        exchange: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Lookup exchange/depository member by member ID, DP ID, or legal/trade name."""
+        snap = self.get_snapshot("src_market_infrastructure")
+        if not snap:
+            return None
+        import re
+        target = re.sub(r"[\s\-]", "", identifier_or_name).upper()
+        target_name_clean = " ".join(identifier_or_name.lower().split())
+
+        for rec in snap.records:
+            if exchange and rec.get("exchange", "").upper() != exchange.upper():
+                continue
+            rec_id = re.sub(r"[\s\-]", "", rec.get("member_id", "")).upper()
+            if rec_id == target:
+                return dict(rec)
+            rec_legal = " ".join(rec.get("entity_name", "").lower().split())
+            rec_trade = " ".join(rec.get("trade_name", "").lower().split())
+            if (
+                target_name_clean == rec_legal
+                or (rec_trade and target_name_clean == rec_trade)
+                or target_name_clean in rec_legal
+                or (rec_trade and target_name_clean in rec_trade)
+            ):
+                return dict(rec)
+        return None
+
+    def lookup_upi_vpa(self, vpa: str) -> Optional[dict[str, Any]]:
+        """Lookup UPI VPA in verified merchant directory and flagged blacklists."""
+        snap = self.get_snapshot("src_upis_official")
+        if not snap:
+            return None
+        target = vpa.strip().lower()
+        for rec in snap.records:
+            if rec.get("vpa", "").lower() == target:
+                return dict(rec)
+        return None
+
+    def is_personal_vpa_pattern(self, vpa: str) -> bool:
+        """Detect whether a VPA exhibits patterns indicative of a personal account."""
+        import re
+        vpa_clean = vpa.strip().lower()
+        if "@" not in vpa_clean:
+            return False
+        handle, bank = vpa_clean.split("@", 1)
+        # 1. 10-digit mobile number as handle (e.g. 9876543210@paytm)
+        if re.match(r"^[6-9][0-9]{9}$", handle):
+            return True
+        # 2. Firstname.lastname or name with numbers (e.g. rohit.kumar1985, ankit_99)
+        if re.match(r"^[a-z]+[._][a-z0-9]+$", handle) and not any(
+            broker in handle for broker in ["zerodha", "groww", "angelone", "upstox", "icici", "hdfc", "axis", "kotak"]
+        ):
+            return True
+        return False

@@ -16,16 +16,23 @@ Phase 3 — Authoritative Verification, Evidence Retrieval, Findings, Conflict R
     - `MCAVerificationAdapter`: Verifies 21-character Corporate Identification Numbers (CINs) and company names (ACTIVE, STRUCK_OFF, DISSOLVED, UNREGISTERED).
     - `CircularsVerificationAdapter`: Matches claims and signals against official regulatory circulars (e.g. SEBI prohibition of guaranteed returns under SEBI/HO/MIRSD, prohibition of OTP/credential solicitation under SEBI/HO/ISD, fraudulent fee demands, and statutory disclaimers).
     - `OfficialDomainsVerificationAdapter`: Authenticates official financial infrastructure domains, flags high-risk suspicious TLDs, and detects known phishing/lookalike domains.
+    - `MarketInfrastructureVerificationAdapter`: Verifies trading members across NSE, BSE, MCX and depository participants across NSDL and CDSL. Evaluates active registration, expelled/defaulter status (e.g. Karvy 08035), expired terms (OUTDATED), and invalid/unregistered member codes (INSUFFICIENT_EVIDENCE).
+    - `UPIPaymentVerificationAdapter`: Verifies UPI payment handles against official broker directories (e.g. Zerodha, Groww, AngelOne), flags known fraudulent predator VPAs, detects corporate-vs-personal mismatch anomalies (claiming corporate broker identity while directing funds to personal handle), and maintains epistemic safety by marking unfamiliar personal VPAs as INSUFFICIENT_EVIDENCE without false fraud labeling.
   - Standardized on 5 epistemic verification stances (`SUPPORTED`, `CONTRADICTED`, `CONFLICTING`, `OUTDATED`, `INSUFFICIENT_EVIDENCE`).
+  - Enhanced `Evidence` domain entity with full provenance metadata, raw and normalized values, time-validity bounds (`effective_from`, `effective_until`), and multi-dimensional quality metrics (freshness, completeness, extraction_confidence, authority_tier).
+  - Implemented tamper-evident chained audit ledger (`AuditEvent`) in `TenantRepository`, linking all verification actions with SHA3-256 predecessor hash chaining.
+  - Implemented lightweight FastAPI REST service (`sangyan.api`) with verification endpoints (`/api/v1/verify/claim`, `/api/v1/verify/content`, `/api/v1/investigations/{id}`, `/api/v1/audit/events`) and server-rendered HTML inspection views (`/inspect/claim/{id}`, `/inspect/investigation/{id}`) featuring side-by-side evidence diffs, PQC receipt badges, and mandatory Section 40 absence-of-evidence banners.
   - Implemented deterministic conflict resolution handling opposing authoritative records, persisting dual evidence, and emitting `CONFLICTING` stances.
   - Implemented `TrustBindingService` cryptographically binding findings, claims, and evidence hashes into canonical verification payloads signed with pure-Python ML-DSA-65 post-quantum digital signatures (`TrustReceipt`).
   - Implemented `ClaimVerificationEngine` orchestrating adapters, conflict resolution, stance resolution, and tenant persistence.
   - Expanded test suite with 18 comprehensive verification tests (`tests/test_verification.py`), covering registry lookups, snapshot integrity, caching, rate limiting, all adapters, conflict resolution, ML-DSA-65 tamper detection, cross-tenant isolation, and adversarial evasion. Total test suite: 82 passed in 5.85s.
 
 ## 3. Files Changed / Created
+- `sangyan/domain/models.py`, `sangyan/domain/__init__.py` (Extended Evidence properties, AuditEvent dataclass)
+- `sangyan/tenancy/repository.py` (record_audit_event, list_audit_events with chained SHA3-256 ledger)
 - `sangyan/verification/__init__.py`
-- `sangyan/verification/sources.py`
-- `sangyan/verification/snapshots.py`
+- `sangyan/verification/sources.py` (Source metadata expansion, seed sources for MCX, NSDL, CDSL, UPI, IRDAI)
+- `sangyan/verification/snapshots.py` (Market infrastructure records, UPI directory records, lookup helpers)
 - `sangyan/verification/cache.py`
 - `sangyan/verification/adapters/__init__.py`
 - `sangyan/verification/adapters/base.py`
@@ -33,13 +40,18 @@ Phase 3 — Authoritative Verification, Evidence Retrieval, Findings, Conflict R
 - `sangyan/verification/adapters/mca.py`
 - `sangyan/verification/adapters/circulars.py`
 - `sangyan/verification/adapters/official_domains.py`
+- `sangyan/verification/adapters/market_infrastructure.py` (NSE/BSE/MCX trading members, NSDL/CDSL DPs)
+- `sangyan/verification/adapters/payment.py` (UPI VPA verification, scam detection, mismatch detection)
 - `sangyan/verification/trust_binding.py`
-- `sangyan/verification/engine.py`
-- `tests/test_verification.py`
-- `decisions.md` (Architectural decisions D-014 through D-021)
-- `flow.md` (Added Section 7 and updated Session Changelog)
-- `handoff.md` (Updated project status and Phase 3 completion)
-- `MODEL_CHANGES.md` (Domain model relationships, schema contracts, and VerificationOutcome specifications)
+- `sangyan/verification/engine.py` (Full multi-adapter registration, audit emission, quality metric population)
+- `sangyan/api/__init__.py`, `sangyan/api/app.py`, `sangyan/api/routes.py`, `sangyan/api/views.py` (FastAPI app, REST endpoints, HTML inspection views)
+- `tests/test_verification.py` (28 unit and integration tests)
+- `tests/test_verification_extended.py` (10 tests for market infrastructure, payment VPAs, audit ledger)
+- `tests/test_api.py` (8 integration tests for REST routes and HTML views)
+- `decisions.md` (Architectural decisions D-014 through D-029)
+- `flow.md` (Updated claim verification tree, audit ledger, API routes, and Session Changelog)
+- `handoff.md` (Updated project status and Phase 3 full completion)
+- `MODEL_CHANGES.md` (Domain model contracts, Evidence properties, AuditEvent, Section 40 banner)
 
 ## 4. Current Architecture / State
 The repository has a working, tested, standalone foundation, complete Content Intelligence Pipeline, and complete Authoritative Verification Engine:
@@ -88,6 +100,12 @@ The repository has a working, tested, standalone foundation, complete Content In
 - D-021: Verification Caching & Upstream Rate Limiting
 - D-022: Multi-Domain Threat Precedence, Disclaimer Evasion Defense, and Engine Fault Resilience
 - D-023: End-to-End Investigation Orchestration & Regex Clause Splitting Preservation
+- D-024: Market Infrastructure Verification Adapter (NSE, BSE, MCX, NSDL, CDSL)
+- D-025: Payment Destination Verification Adapter (UPI VPA Fraud & Mismatch Detection)
+- D-026: Evidence Quality Metrics & Provenance Normalization Architecture
+- D-027: Tamper-Evident Chained Audit Logging Architecture
+- D-028: Verification REST API & Inspection Architecture
+- D-029: Human Inspection Views with Mandatory Section 40 Epistemic Safeguards
 
 ## 6. Requirements and Constraints
 - Git authorship: strictly `PrathamKapoor <prathamkapoor027@gmail.com>`. No AI/model attribution.
@@ -98,7 +116,9 @@ The repository has a working, tested, standalone foundation, complete Content In
 - Do not commit paper/, research/, *.tex.
 
 ## 7. Testing and Verification
-- Full test suite: **92 passed in 7.62s**, 0 failures, exit code 0 (`C:\Projects\SIH26\TRUST-SAT\.venv313repro\Scripts\python.exe -m pytest tests -v`).
+- Full test suite: **110 passed in 7.33s**, 0 failures, exit code 0 (`C:\Projects\SIH26\TRUST-SAT\.venv313repro\Scripts\python.exe -m pytest tests -v`).
+- `tests/test_verification_extended.py`: 10 passed (market infrastructure active/expelled/defaulter/non-existent lookups, UPI official/scam/personal/mismatch lookups, audit event emission, and chained ledger cryptographic tampering detection).
+- `tests/test_api.py`: 8 passed (single claim verification REST, batch content verification REST, investigation detail REST, claim evidence list REST, claim findings list REST, sources registry list REST, audit event ledger list REST, and human HTML inspection view rendering with Section 40 warning).
 - `tests/test_crypto.py`: 3 passed (canonical JSON key sorting, SHA3-256 digest, ML-DSA-65 keygen/sign/verify/tamper detection).
 - `tests/test_database.py`: 4 passed (connect, query, duplicate entry, transaction rollback, migration runner idempotency).
 - `tests/test_domain.py`: 22 passed (all 10 domain models, enums, confidence vectors, validation error reporting).

@@ -22,13 +22,16 @@ from sangyan.intelligence.pipeline import AnalysisResult, ContentIntelligenceEng
 from sangyan.tenancy.repository import TenantRepository
 from sangyan.verification.adapters.base import AdapterResult, VerificationAdapter
 from sangyan.verification.adapters.circulars import CircularsVerificationAdapter
+from sangyan.verification.adapters.market_infrastructure import MarketInfrastructureVerificationAdapter
 from sangyan.verification.adapters.mca import MCAVerificationAdapter
 from sangyan.verification.adapters.official_domains import OfficialDomainsVerificationAdapter
+from sangyan.verification.adapters.payment import UPIPaymentVerificationAdapter
 from sangyan.verification.adapters.sebi import SEBIVerificationAdapter
 from sangyan.verification.cache import RateLimiter, VerificationCache
 from sangyan.verification.snapshots import SnapshotManager
 from sangyan.verification.sources import AuthoritativeSourceRegistry
 from sangyan.verification.trust_binding import TrustBindingService
+
 
 
 @dataclass
@@ -100,7 +103,10 @@ class ClaimVerificationEngine:
             MCAVerificationAdapter(self.snapshots),
             CircularsVerificationAdapter(self.snapshots),
             OfficialDomainsVerificationAdapter(self.snapshots),
+            MarketInfrastructureVerificationAdapter(self.snapshots),
+            UPIPaymentVerificationAdapter(self.snapshots),
         ]
+
 
     def add_adapter(self, adapter: VerificationAdapter) -> None:
         """Register custom or specialized verification adapter."""
@@ -190,6 +196,35 @@ class ClaimVerificationEngine:
                 evidence_stance = "SUPPORTS" if res.stance == "SUPPORTED" else (
                     "CONTRADICTS" if res.stance in {"CONTRADICTED", "OUTDATED"} else "NEUTRAL"
                 )
+                source_rec_id = (
+                    res.structured_fact.get("registration_number")
+                    or res.structured_fact.get("cin")
+                    or res.structured_fact.get("member_id")
+                    or res.structured_fact.get("vpa")
+                    or res.structured_fact.get("circular_no")
+                    or res.structured_fact.get("domain")
+                    or ""
+                )
+                ev_metadata = {
+                    "adapter_id": res.adapter_id,
+                    "rationale": res.rationale,
+                    "tenant_id": repository.organization_id if repository else "",
+                    "source_record_id": str(source_rec_id),
+                    "source_url": src_domain.url or "",
+                    "evidence_type": "REGISTRY_RECORD" if "circulars" not in res.adapter_id else "CIRCULAR_CLAUSE",
+                    "provenance": "STATUTORY_REGISTRY_SNAPSHOT",
+                    "raw_value": claim.statement,
+                    "normalized_value": res.excerpt,
+                    "effective_from": res.structured_fact.get("effective_from"),
+                    "effective_until": res.valid_until or res.structured_fact.get("valid_until"),
+                    "quality": {
+                        "authority": 1.0 if res.source_id.startswith("src_sebi") or res.source_id.startswith("src_mca") else 0.9,
+                        "freshness": 0.95,
+                        "directness": 1.0 if res.stance in {"SUPPORTED", "CONTRADICTED"} else 0.5,
+                        "specificity": 0.95 if res.structured_fact else 0.8,
+                        "completeness": 0.9,
+                    },
+                }
                 evid = Evidence(
                     source_id=src_domain.id,
                     claim_id=claim.id,
@@ -200,7 +235,7 @@ class ClaimVerificationEngine:
                     content_hash=sha3_256_text(res.excerpt),
                     retrieved_at=res.retrieved_at,
                     published_at=res.retrieved_at,
-                    metadata={"adapter_id": res.adapter_id, "rationale": res.rationale},
+                    metadata=ev_metadata,
                 )
                 evidence_items.append(evid)
 
@@ -233,6 +268,18 @@ class ClaimVerificationEngine:
                 for ev in evidence_items:
                     repository.save_evidence(ev)
                 repository.save_finding(finding)
+                repository.record_audit_event(
+                    action="verify_claim",
+                    resource=f"claim:{claim.id}",
+                    result=status,
+                    metadata={
+                        "claim_type": claim.claim_type,
+                        "statement": claim.statement[:120],
+                        "evidence_count": len(evidence_items),
+                        "adapters": [r.adapter_id for r in results],
+                        "trust_receipt_id": trust_receipt_id,
+                    },
+                )
 
         return VerificationOutcome(
             claim_id=claim.id,
@@ -298,7 +345,20 @@ class ClaimVerificationEngine:
         )
 
         if repository:
-            repository.save_investigation(inv)
+            with repository._db.transaction():
+                repository.save_investigation(inv)
+                repository.record_audit_event(
+                    action="verify_content_item",
+                    resource=f"investigation:{inv.id}",
+                    result=overall_status,
+                    metadata={
+                        "content_item_id": content_item.id,
+                        "claims_count": len(analysis.claims),
+                        "signals_count": len(analysis.signals),
+                        "risk_score": analysis.risk_score,
+                        "trust_receipt_id": first_receipt,
+                    },
+                )
 
         return InvestigationReport(
             content_item=content_item,
@@ -307,6 +367,7 @@ class ClaimVerificationEngine:
             investigation=inv,
             overall_status=overall_status,
         )
+
 
 
     def _resolve_stances(
