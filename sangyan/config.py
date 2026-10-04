@@ -109,6 +109,25 @@ class SangyanConfig:
     secondary_backup_s3_bucket: Optional[str] = None
     secondary_backup_s3_region: Optional[str] = None
 
+    # Hardware Security Module & Post-Quantum Signing (Phase 11)
+    signing_provider: str = "software"  # software | pkcs11_simulator | pkcs11
+    signing_key_id: str = "default"
+    pkcs11_lib_path: Optional[str] = None
+    pkcs11_slot_id: int = 0
+    pkcs11_token_label: str = "Sangyan-ML-DSA-HSM"
+    pkcs11_pin: Optional[str] = None
+
+    # Real-Time Investigation Streaming (Phase 11)
+    realtime_events_enabled: bool = True
+    realtime_heartbeat_sec: float = 15.0
+    realtime_queue_maxsize: int = 500
+
+    # PostgreSQL Physical Streaming Replication & Promotion Tooling (Phase 11)
+    pg_replication_primary_slot: str = "sangyan_standby_slot"
+    pg_replication_max_lag_bytes: int = 10 * 1024 * 1024
+    pg_replication_max_lag_sec: float = 10.0
+    pg_standby_host: Optional[str] = None
+
     # Server execution
     host: str = "0.0.0.0"
     port: int = 8000
@@ -345,6 +364,19 @@ def load_config(env_source: Optional[Mapping[str, str]] = None) -> SangyanConfig
         secondary_database_url=env.get("SANGYAN_SECONDARY_DATABASE_URL"),
         secondary_backup_s3_bucket=env.get("SANGYAN_SECONDARY_BACKUP_S3_BUCKET"),
         secondary_backup_s3_region=env.get("SANGYAN_SECONDARY_BACKUP_S3_REGION"),
+        signing_provider=env.get("SANGYAN_SIGNING_PROVIDER", "software"),
+        signing_key_id=env.get("SANGYAN_SIGNING_KEY_ID", "default"),
+        pkcs11_lib_path=env.get("SANGYAN_PKCS11_LIB_PATH"),
+        pkcs11_slot_id=int(env.get("SANGYAN_PKCS11_SLOT_ID", "0")),
+        pkcs11_token_label=env.get("SANGYAN_PKCS11_TOKEN_LABEL", "Sangyan-ML-DSA-HSM"),
+        pkcs11_pin=env.get("SANGYAN_PKCS11_PIN"),
+        realtime_events_enabled=_str_to_bool(env.get("SANGYAN_REALTIME_EVENTS_ENABLED"), default=True),
+        realtime_heartbeat_sec=float(env.get("SANGYAN_REALTIME_HEARTBEAT_SEC", "15.0")),
+        realtime_queue_maxsize=int(env.get("SANGYAN_REALTIME_QUEUE_MAXSIZE", "500")),
+        pg_replication_primary_slot=env.get("SANGYAN_PG_REPLICATION_PRIMARY_SLOT", "sangyan_standby_slot"),
+        pg_replication_max_lag_bytes=int(env.get("SANGYAN_PG_REPLICATION_MAX_LAG_BYTES", str(10 * 1024 * 1024))),
+        pg_replication_max_lag_sec=float(env.get("SANGYAN_PG_REPLICATION_MAX_LAG_SEC", "10.0")),
+        pg_standby_host=env.get("SANGYAN_PG_STANDBY_HOST"),
         host=env.get("SANGYAN_HOST", "0.0.0.0"),
         port=port,
         log_level=env.get("SANGYAN_LOG_LEVEL", "INFO").upper(),
@@ -419,6 +451,13 @@ def validate_production_config(config: SangyanConfig) -> None:
         errors.append("SANGYAN_TASK_LEASE_DURATION_SEC must be positive.")
     if config.max_contents_per_workflow_request <= 0:
         errors.append("SANGYAN_MAX_CONTENTS_PER_WORKFLOW_REQUEST must be positive.")
+
+    # 9. HSM PKCS#11 fail-closed verification in production
+    if config.signing_provider == "pkcs11":
+        if not config.pkcs11_lib_path:
+            errors.append("Production with signing_provider='pkcs11' requires SANGYAN_PKCS11_LIB_PATH; fail-closed.")
+        elif not os.path.exists(config.pkcs11_lib_path):
+            errors.append(f"Configured PKCS#11 library does not exist: '{config.pkcs11_lib_path}'; fail-closed.")
 
     if errors:
         msg = "Production Configuration Validation Failed:\n" + "\n".join(f"  - {e}" for e in errors)

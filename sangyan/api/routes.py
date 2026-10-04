@@ -1,11 +1,15 @@
 """REST API routes for authoritative verification, evidence retrieval, and findings."""
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from sangyan.realtime.broker import get_event_broker
 
 from sangyan.correlation.orchestrator import InvestigationOrchestrator
 from sangyan.core.errors import (
@@ -313,6 +317,84 @@ def get_api_router(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found")
         except PermissionDeniedError as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+    @router.get("/investigations/{investigation_id}/events")
+    async def stream_investigation_events(
+        investigation_id: str,
+        request: Request,
+        last_event_id: Optional[str] = Query(None, alias="last_event_id"),
+        principal: Principal = Depends(_auth),
+    ):
+        """Real-time Server-Sent Events (SSE) stream of investigation progress events.
+
+        Supports Last-Event-ID replay, heartbeat keep-alive, and strict multi-tenant boundary.
+        """
+        if not principal.has_permission("investigation:read"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires investigation:read permission")
+
+        repo = _get_repo(principal.organization_id, principal.principal_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication and tenant context required")
+
+        try:
+            inv = repo.get_investigation(investigation_id)
+        except NotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found")
+
+        header_last_id = request.headers.get("last-event-id") or last_event_id
+        broker = get_event_broker()
+
+        async def event_generator():
+            try:
+                async for ev in broker.subscribe(
+                    investigation_id=investigation_id,
+                    organization_id=principal.organization_id,
+                    last_event_id=header_last_id,
+                ):
+                    if await request.is_disconnected():
+                        break
+                    yield ev.to_sse_message()
+            except asyncio.CancelledError:
+                pass
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @router.get("/investigations/{investigation_id}/events/history", response_model=list[dict[str, Any]])
+    def get_investigation_event_history(
+        investigation_id: str,
+        after_sequence: int = Query(0, ge=0),
+        limit: int = Query(500, ge=1, le=1000),
+        principal: Principal = Depends(_auth),
+    ):
+        """Retrieve historical sequenced progress events for an investigation with tenant isolation."""
+        if not principal.has_permission("investigation:read"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires investigation:read permission")
+
+        repo = _get_repo(principal.organization_id, principal.principal_id)
+        if not repo:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication and tenant context required")
+
+        try:
+            inv = repo.get_investigation(investigation_id)
+        except NotFoundError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Investigation not found")
+
+        broker = get_event_broker()
+        events = broker.get_events(
+            investigation_id=investigation_id,
+            organization_id=principal.organization_id,
+            after_sequence=after_sequence,
+            limit=limit,
+        )
+        return [ev.to_dict() for ev in events]
 
     @router.get("/claims/{claim_id}", response_model=dict[str, Any])
     def get_claim(

@@ -35,7 +35,8 @@ logger = get_logger("sangyan.workflow.nodes")
 from sangyan.intelligence.pipeline import ContentIntelligenceEngine
 from sangyan.tenancy.repository import TenantRepository
 from sangyan.verification.engine import ClaimVerificationEngine, VerificationOutcome
-from sangyan.verification.trust_binding import TrustBindingService
+from sangyan.realtime.broker import get_event_broker
+from sangyan.realtime.models import InvestigationEventType
 from sangyan.workflow.errors import RetryableWorkflowError
 from sangyan.workflow.state import InvestigationWorkflowState
 
@@ -55,6 +56,7 @@ class WorkflowNodeSuite:
         explainer: Optional[InvestigationExplainer] = None,
         trust_binding: Optional[TrustBindingService] = None,
         repository_factory: Optional[Callable[[str], TenantRepository]] = None,
+        event_broker: Optional[Any] = None,
     ) -> None:
         self.intelligence_engine = intelligence_engine or ContentIntelligenceEngine()
         self.verification_engine = verification_engine or ClaimVerificationEngine(trust_binding=trust_binding)
@@ -66,6 +68,28 @@ class WorkflowNodeSuite:
         self.explainer = explainer or InvestigationExplainer()
         self.trust_binding = trust_binding or self.verification_engine.trust_binding
         self.repository_factory = repository_factory
+        self.event_broker = event_broker
+
+    def _emit_event(
+        self,
+        state: InvestigationWorkflowState,
+        event_type: str | InvestigationEventType,
+        node_name: Optional[str] = None,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> None:
+        try:
+            broker = self.event_broker or get_event_broker()
+            inv_id = state.get("investigation_id", "unknown")
+            org_id = state.get("organization_id", "default")
+            broker.publish(
+                investigation_id=inv_id,
+                organization_id=org_id,
+                event_type=event_type,
+                node_name=node_name,
+                payload=payload or {},
+            )
+        except Exception as exc:
+            logger.debug("Failed emitting workflow event %s: %s", event_type, exc)
 
     def _get_repository(self, organization_id: str, user_id: Optional[str] = None) -> Optional[TenantRepository]:
         if self.repository_factory is None:
@@ -84,17 +108,20 @@ class WorkflowNodeSuite:
     # -----------------------------------------------------------------------
     def intake_node(self, state: InvestigationWorkflowState) -> dict[str, Any]:
         """Validate input content items and persist them within tenant scope."""
+        self._emit_event(state, InvestigationEventType.INTAKE_STARTED, "intake_node")
         org_id = state["organization_id"]
         inv_id = state["investigation_id"]
         user_id = state["user_id"]
         raw_items = state.get("content_items", [])
         if not raw_items:
-            return {
+            res = {
                 "errors": state.get("errors", []) + ["No content items provided in workflow state."],
                 "status": "FAILED",
                 "current_stage": "intake_node",
                 "updated_at": time.time(),
             }
+            self._emit_event(state, InvestigationEventType.INVESTIGATION_FAILED, "intake_node", {"error": "No content items"})
+            return res
 
         repo = self._get_repository(org_id, state.get("user_id"))
         content_items = [ContentItem.from_dict(d) for d in raw_items]
@@ -133,18 +160,26 @@ class WorkflowNodeSuite:
                 except Exception:
                     pass
 
-        return {
+        res = {
             "content_item_ids": [c.id for c in content_items],
             "status": "INTAKE",
             "current_stage": "intake_node",
             "updated_at": time.time(),
         }
+        self._emit_event(
+            state,
+            InvestigationEventType.INTAKE_COMPLETED,
+            "intake_node",
+            {"content_item_count": len(content_items)},
+        )
+        return res
 
     # -----------------------------------------------------------------------
     # Node 2: Content Intelligence
     # -----------------------------------------------------------------------
     def intelligence_node(self, state: InvestigationWorkflowState) -> dict[str, Any]:
         """Decompose atomic claims, resolve financial entities, and extract observable signals."""
+        self._emit_event(state, InvestigationEventType.INTELLIGENCE_STARTED, "intelligence_node")
         org_id = state["organization_id"]
         repo = self._get_repository(org_id, state.get("user_id"))
         raw_items = state.get("content_items", [])
@@ -201,7 +236,7 @@ class WorkflowNodeSuite:
             except Exception:
                 pass
 
-        return {
+        res = {
             "claims": [c.to_dict() for c in all_claims],
             "claim_ids": [c.id for c in all_claims],
             "entities": [e.to_dict() for e in all_entities],
@@ -213,12 +248,24 @@ class WorkflowNodeSuite:
             "current_stage": "intelligence_node",
             "updated_at": time.time(),
         }
+        self._emit_event(
+            state,
+            InvestigationEventType.INTELLIGENCE_COMPLETED,
+            "intelligence_node",
+            {
+                "claims_count": len(all_claims),
+                "entities_count": len(all_entities),
+                "signals_count": len(all_signals),
+            },
+        )
+        return res
 
     # -----------------------------------------------------------------------
     # Node 3: Authoritative Verification
     # -----------------------------------------------------------------------
     def verification_node(self, state: InvestigationWorkflowState) -> dict[str, Any]:
         """Verify atomic claims against authoritative regulatory adapters."""
+        self._emit_event(state, InvestigationEventType.VERIFICATION_STARTED, "verification_node")
         org_id = state["organization_id"]
         repo = self._get_repository(org_id, state.get("user_id"))
         claims = [Claim.from_dict(d) for d in state.get("claims", [])]
@@ -270,7 +317,7 @@ class WorkflowNodeSuite:
             except Exception:
                 pass
 
-        return {
+        res = {
             "findings": [f.to_dict() for f in all_findings],
             "finding_ids": [f.id for f in all_findings],
             "evidence_items": [e.to_dict() for e in all_evidence],
@@ -279,12 +326,20 @@ class WorkflowNodeSuite:
             "current_stage": "verification_node",
             "updated_at": time.time(),
         }
+        self._emit_event(
+            state,
+            InvestigationEventType.VERIFICATION_COMPLETED,
+            "verification_node",
+            {"findings_count": len(all_findings), "evidence_count": len(all_evidence)},
+        )
+        return res
 
     # -----------------------------------------------------------------------
     # Node 4: Investigation Correlation
     # -----------------------------------------------------------------------
     def correlation_node(self, state: InvestigationWorkflowState) -> dict[str, Any]:
         """Construct multi-content entity/claim/payment correlation graph."""
+        self._emit_event(state, InvestigationEventType.CORRELATION_STARTED, "correlation_node")
         org_id = state["organization_id"]
         inv_id = state["investigation_id"]
         repo = self._get_repository(org_id, state.get("user_id"))
@@ -308,19 +363,27 @@ class WorkflowNodeSuite:
             repository=repo,
         )
 
-        return {
+        res = {
             "correlations": [c.to_dict() for c in correlations],
             "correlation_ids": [c.id for c in correlations],
             "status": "CORRELATING",
             "current_stage": "correlation_node",
             "updated_at": time.time(),
         }
+        self._emit_event(
+            state,
+            InvestigationEventType.CORRELATION_COMPLETED,
+            "correlation_node",
+            {"correlations_count": len(correlations)},
+        )
+        return res
 
     # -----------------------------------------------------------------------
     # Node 5: Scam Chain & Taxonomy
     # -----------------------------------------------------------------------
     def scam_chain_node(self, state: InvestigationWorkflowState) -> dict[str, Any]:
         """Reconstruct 12-stage scam lifecycle and classify controlled scam patterns."""
+        self._emit_event(state, InvestigationEventType.SCAM_CHAIN_STARTED, "scam_chain_node")
         org_id = state["organization_id"]
         inv_id = state["investigation_id"]
         repo = self._get_repository(org_id, state.get("user_id"))
@@ -383,7 +446,7 @@ class WorkflowNodeSuite:
                 review_required = True
                 review_reason = "Suspicious behavioral signals or outdated regulatory credentials require human validation."
 
-        return {
+        res = {
             "scam_chain": [s.to_dict() for s in scam_chain],
             "scam_patterns": scam_patterns,
             "risk_posture": risk_posture,
@@ -392,12 +455,20 @@ class WorkflowNodeSuite:
             "current_stage": "scam_chain_node",
             "updated_at": time.time(),
         }
+        self._emit_event(
+            state,
+            InvestigationEventType.SCAM_CHAIN_COMPLETED,
+            "scam_chain_node",
+            {"risk_posture": risk_posture, "scam_patterns": scam_patterns},
+        )
+        return res
 
     # -----------------------------------------------------------------------
     # Node 6: Guidance & Grievance Routing
     # -----------------------------------------------------------------------
     def guidance_node(self, state: InvestigationWorkflowState) -> dict[str, Any]:
         """Generate safe, non-investment guidance and statutory grievance routing dossiers."""
+        self._emit_event(state, InvestigationEventType.GUIDANCE_STARTED, "guidance_node")
         org_id = state["organization_id"]
         inv_id = state["investigation_id"]
         repo = self._get_repository(org_id, state.get("user_id"))
@@ -434,19 +505,27 @@ class WorkflowNodeSuite:
             except Exception:
                 pass
 
-        return {
+        res = {
             "guidance": [g.to_dict() for g in guidance],
             "guidance_ids": [g.id for g in guidance],
             "grievance": grievance.to_dict(),
             "current_stage": "guidance_node",
             "updated_at": time.time(),
         }
+        self._emit_event(
+            state,
+            InvestigationEventType.GUIDANCE_COMPLETED,
+            "guidance_node",
+            {"guidance_count": len(guidance)},
+        )
+        return res
 
     # -----------------------------------------------------------------------
     # Node 7: Explanation
     # -----------------------------------------------------------------------
     def explanation_node(self, state: InvestigationWorkflowState) -> dict[str, Any]:
         """Generate human-readable explainability report with mandatory uncertainty disclosures."""
+        self._emit_event(state, InvestigationEventType.EXPLANATION_STARTED, "explanation_node")
         signals = [Signal.from_dict(d) for d in state.get("signals", [])]
         claims = [Claim.from_dict(d) for d in state.get("claims", [])]
         entities = [Entity.from_dict(d) for d in state.get("entities", [])]
@@ -465,11 +544,13 @@ class WorkflowNodeSuite:
             overall_status=overall_status,
         )
 
-        return {
+        res = {
             "explanation": explanation.to_dict(),
             "current_stage": "explanation_node",
             "updated_at": time.time(),
         }
+        self._emit_event(state, InvestigationEventType.EXPLANATION_COMPLETED, "explanation_node")
+        return res
 
     # -----------------------------------------------------------------------
     # Node 8: Human Review Gate (Durable LangGraph Interrupt)
@@ -506,6 +587,13 @@ class WorkflowNodeSuite:
                 except Exception:
                     pass
 
+            self._emit_event(
+                state,
+                InvestigationEventType.REVIEW_REQUIRED,
+                "review_gate_node",
+                {"reason": state.get("review_reason", "Supervisory review required.")},
+            )
+
             # Physical durable pause in LangGraph
             decision_payload = interrupt({
                 "investigation_id": inv_id,
@@ -521,6 +609,13 @@ class WorkflowNodeSuite:
                 decision_dict = decision_payload
             elif isinstance(decision_payload, str):
                 decision_dict = {"action": decision_payload, "reason": "Provided via string resume"}
+
+            self._emit_event(
+                state,
+                InvestigationEventType.REVIEW_RESUMED,
+                "review_gate_node",
+                {"decision": decision_dict},
+            )
 
             # Record review domain entity
             if repo is not None:
@@ -565,6 +660,7 @@ class WorkflowNodeSuite:
     # -----------------------------------------------------------------------
     def trust_finalization_node(self, state: InvestigationWorkflowState) -> dict[str, Any]:
         """Sign completed investigation dossier using NIST FIPS 204 ML-DSA-65 post-quantum cryptography."""
+        self._emit_event(state, InvestigationEventType.TRUST_FINALIZATION_STARTED, "trust_finalization_node")
         org_id = state["organization_id"]
         inv_id = state["investigation_id"]
         repo = self._get_repository(org_id, state.get("user_id"))
@@ -572,11 +668,13 @@ class WorkflowNodeSuite:
         # Idempotency check: if already signed and receipt exists, reuse
         existing_receipt_id = state.get("trust_receipt_id")
         if existing_receipt_id:
-            return {
+            res = {
                 "trust_status": "FINALIZED",
                 "current_stage": "trust_finalization_node",
                 "updated_at": time.time(),
             }
+            self._emit_event(state, InvestigationEventType.TRUST_FINALIZATION_COMPLETED, "trust_finalization_node")
+            return res
 
         trust_receipt_id: Optional[str] = None
         trust_status = "FINALIZED"
@@ -629,12 +727,19 @@ class WorkflowNodeSuite:
                     except Exception:
                         pass
 
-        return {
+        res = {
             "trust_receipt_id": trust_receipt_id,
             "trust_status": trust_status,
             "current_stage": "trust_finalization_node",
             "updated_at": time.time(),
         }
+        self._emit_event(
+            state,
+            InvestigationEventType.TRUST_FINALIZATION_COMPLETED,
+            "trust_finalization_node",
+            {"trust_receipt_id": trust_receipt_id, "trust_status": trust_status},
+        )
+        return res
 
     # -----------------------------------------------------------------------
     # Node 10: Completion
@@ -686,6 +791,13 @@ class WorkflowNodeSuite:
             except Exception:
                 pass
 
+        self._emit_event(
+            state,
+            InvestigationEventType.INVESTIGATION_COMPLETED,
+            "completion_node",
+            {"overall_status": overall_status, "trust_receipt_id": trust_receipt_id},
+        )
+
         return {
             "status": "COMPLETED",
             "current_stage": "completion_node",
@@ -720,6 +832,13 @@ class WorkflowNodeSuite:
                 )
             except Exception:
                 pass
+
+        self._emit_event(
+            state,
+            InvestigationEventType.INVESTIGATION_FAILED,
+            "failure_node",
+            {"errors": errors, "status": status},
+        )
 
         return {
             "status": status,

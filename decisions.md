@@ -1336,3 +1336,120 @@ This file is an append-only record of architectural, domain, security, data, and
 - Alternatives considered: Automatic failback upon ping detection (rejected: hazardous due to flapping networks and incomplete database replication).
 - Consequences: Safe, operator-governed disaster failback with complete cryptographic continuity.
 - Files: \sangyan/dr/manager.py\, \sangyan/cli.py\, \	ests/test_phase10_dr_failback.py\, \	ests/test_phase10_full_dr_drill.py
+---
+
+### D-081: Real-Time Server-Sent Events (SSE) Protocol & Non-Blocking Event Broker
+- Date / phase / commit: 2026-10-04, Phase 11
+- Context: Long-running multi-stage investigations (intake, intelligence, verification, correlation, scam chain, guidance, explanation, human review, post-quantum trust finalization) require real-time client feedback. WebSocket introduces bidirectional connection state, sticky sessions, and firewall traversal friction, whereas Server-Sent Events (SSE) is unidirectional, HTTP/1.1 and HTTP/2 native, auto-reconnecting, and leverages standard `Last-Event-ID` resumption semantics.
+- Decision: Implemented SSE real-time streaming with an in-process, non-blocking broker (`sangyan/realtime/`):
+  1. Unidirectional SSE Protocol: Standard HTTP `text/event-stream` endpoint `GET /api/v1/investigations/{id}/events`.
+  2. Non-Blocking In-Memory Backpressure: Each subscriber receives events via bounded `asyncio.Queue(maxsize=1000)`. If a client lags and the queue fills, older events are dropped without blocking workflow node threads.
+  3. Replay & Disconnection Recovery: Events are durably persisted to `sangyan_investigation_events`. Clients supplying `Last-Event-ID` or `?after_sequence=N` replay missed events monotonically before live streaming begins.
+  4. Heartbeat Keep-Alive: Idle streams emit periodic `HEARTBEAT` comments (`: keep-alive\n\n`) every 15 seconds to prevent intermediary proxies or load balancers from terminating idle TCP connections.
+  5. Strict Multi-Tenant Isolation: Subscriptions validate tenant identity and role (`investigation:read`); cross-tenant event leakage is strictly prevented.
+- Why: Provides lightweight, firewall-friendly, resilient real-time streaming without requiring external message brokers or complex WebSocket session routing.
+- Alternatives considered: Raw WebSockets (rejected: bidirectional complexity, proxy stickiness issues, extra handshake overhead).
+- Consequences: Low-latency live progress updates with monotonic sequence guarantees and zero-loss client reconnection.
+- Files: `sangyan/realtime/models.py`, `sangyan/realtime/broker.py`, `sangyan/api/routes.py`, `tests/test_phase11_realtime_sse.py`
+
+---
+
+### D-082: Schema Migration 007 for Real-Time Event Audit Ledger & Replication State
+- Date / phase / commit: 2026-10-04, Phase 11
+- Context: Real-time event replay requires persistent, indexed sequence storage partitioned by investigation and tenant. Additionally, database streaming replication monitoring requires persistent health state and lag tracking for simulation and verification, and trust receipts require explicit cryptographic signing key attribution.
+- Decision: Implemented Schema Migration 007 (`sangyan/database/migrations.py`):
+  1. `sangyan_investigation_events` Table: Stores sequenced event log with `id`, `investigation_id`, `workflow_run_id`, `organization_id`, `event_type`, `sequence`, `timestamp`, `status`, `stage`, `progress_pct`, `payload_json`, and `created_at`. Indexed on `(investigation_id, sequence)` and `(organization_id, timestamp)`.
+  2. `sangyan_replication_state` Table: Stores replication health and telemetry with `node_id`, `role`, `cluster_epoch`, `wal_lsn`, `replay_lsn`, `lag_bytes`, `lag_seconds`, `last_heartbeat_at`, `is_healthy`, and `metadata`.
+  3. `sangyan_trust_receipts` Extension: Altered schema to add `signing_key_id TEXT NOT NULL DEFAULT 'default'` to attribute trust receipts to specific cryptographic key generations or hardware tokens.
+  4. Dual Dialect & Zero-Downtime Migration: Portable across SQLite and PostgreSQL with idempotent pre-existence checks.
+- Why: Provides relational auditability, sequence monotonicity, replication status persistence, and cryptographic key attribution.
+- Alternatives considered: Purely transient in-memory queues (rejected: loses historical events on restart; prevents replay on client reconnect).
+- Consequences: Durable event audit trails, replication monitoring tables, and versioned trust receipts.
+- Files: `sangyan/database/migrations.py`, `tests/test_database.py`
+
+---
+
+### D-083: Tenancy-Preserving Interactive HTML Investigation Stepper & Real-Time Client
+- Date / phase / commit: 2026-10-04, Phase 11
+- Context: Regulatory analysts and compliance officers require an intuitive, visual representation of live investigation progress across the 10 core pipeline stages without manual page refreshing.
+- Decision: Enhanced the server-rendered HTML inspection interface (`sangyan/api/views.py`):
+  1. Visual 10-Stage Pipeline Stepper: Displays clear interactive cards for Intake, Intelligence, Verification, Correlation, Scam Chain, Guidance, Explanation, Human Review, Post-Quantum Trust Finalization, and Completion.
+  2. Native Browser `EventSource` Integration: Automatically connects to `/api/v1/investigations/{id}/events` via vanilla JavaScript, updating step statuses (`completed`, `active`, `pending`) and progress percentages dynamically.
+  3. Epistemic Posture Display: Prominently highlights evidence verification postures (`SUPPORTED`, `CONTRADICTED`, `CONFLICTING`, `UNVERIFIED`) without speculative claims.
+  4. Supervisory Review Trigger: Pauses at Step 8 (`review_gate_node`) when human review is required, displaying the review decision form directly in the UI.
+- Why: Empowers human analysts with transparent, real-time oversight of autonomous investigations while upholding regulatory safety standards.
+- Alternatives considered: Heavy React/SPA frontend (rejected: violates zero-dependency architectural constraint; complicates air-gapped deployments).
+- Consequences: Clean, dependency-free interactive UI with real-time SSE updates.
+- Files: `sangyan/api/views.py`
+
+---
+
+### D-084: Hardware Security Module (HSM) PKCS#11 Abstraction & Strict Private Key Isolation
+- Date / phase / commit: 2026-10-04, Phase 11
+- Context: Production deployment of post-quantum ML-DSA-65 signatures requires that private signing keys never reside in application memory or on general filesystem disks where memory dumps or compromised worker processes could extract them.
+- Decision: Implemented a cryptographic `SigningProvider` abstraction (`sangyan/crypto/signing_provider.py`):
+  1. `SigningProvider` Abstract Base Class: Defines uniform interface for `sign()`, `verify()`, `rotate_key()`, `health()`, and properties `public_key`, `key_identifier`, `algorithm_id`.
+  2. `SoftwareSigningProvider`: File-backed key storage for local testing and development environments.
+  3. `PKCS11SimulatorSigningProvider`: In-memory HSM emulator adhering to PKCS#11 token semantics. Enforces strict hardware key isolation: secret keys are encapsulated inside simulated hardware storage; any call to `get_private_key_attribute()` raises `CryptoError("CKR_ATTRIBUTE_SENSITIVE")`.
+  4. Session & PIN Authentication: Requires valid user PIN authentication (`C_Login`) and enforces session validation (`C_SignInit` / `C_Sign`).
+- Why: Decouples cryptographic signing from key storage mechanisms while enforcing hardware private key isolation invariants required for regulatory compliance.
+- Alternatives considered: Directly wrapping PyKCS11 without abstraction (rejected: introduces heavy binary C-dependencies that fail in lightweight environments and lack simulation fallbacks).
+- Consequences: Extensible post-quantum signing architecture supporting software, simulator, and physical hardware tokens.
+- Files: `sangyan/crypto/signing_provider.py`, `sangyan/crypto/__init__.py`, `sangyan/trust/service.py`, `tests/test_phase11_hsm_pkcs11.py`
+
+---
+
+### D-085: Fail-Closed PKCS#11 Native Dynamic Linker & Non-Extractable Key Rotation
+- Date / phase / commit: 2026-10-04, Phase 11
+- Context: When configured for production HSM signing, any failure to initialize the physical module (missing shared library, bad PIN, unreachable token) must fail closed immediately rather than silently falling back to insecure software keys. Furthermore, cryptographic key lifecycle governance requires seamless key rotation without invalidating historical trust receipts.
+- Decision: Implemented fail-closed native PKCS#11 provider and key rotation architecture (`sangyan/crypto/signing_provider.py`):
+  1. Strict Fail-Closed Policy: `PKCS11SigningProvider` loads the native shared library (e.g., `/usr/lib/softhsm/libsofthsm2.so` or vendor PKCS#11 `.so`/`.dll`) via `ctypes.CDLL`. If the library is missing, unloadable, or lacks required PKCS#11 symbols (`C_Initialize`), initialization immediately raises `CryptoError` and halts application boot.
+  2. Silent Fallback Prohibited: Software fallback in production mode is strictly disallowed.
+  3. Key Rotation & Historical Receipt Preservation: Rotating to a new key (`rotate_key("key-v2")`) updates the active signing key handle. Historical trust receipts record their specific `signing_key_id` and retain their original public key / certificate, ensuring older receipts remain cryptographically verifiable indefinitely.
+- Why: Prevents silent security downgrades and guarantees long-term forensic verifiability across key rotation cycles.
+- Alternatives considered: Fallback to software on HSM disconnect (rejected: critical security failure; would create unisolated keys in high-security production environments).
+- Consequences: Production-grade cryptographic security posture with fail-closed guarantees.
+- Files: `sangyan/crypto/signing_provider.py`, `sangyan/config.py`, `tests/test_phase11_hsm_pkcs11.py`
+
+---
+
+### D-086: PostgreSQL Physical WAL Streaming Replication Monitoring & Health Tooling
+- Date / phase / commit: 2026-10-04, Phase 11
+- Context: Multi-cloud and cross-region disaster recovery requires continuous active-passive physical WAL replication. Operators must be able to inspect replication lag (bytes and seconds), confirm standby connectivity, and validate replica health against strict SLAs before initiating failovers.
+- Decision: Implemented `PostgresReplicationManager` (`sangyan/database/replication.py`):
+  1. Native PostgreSQL Replication Telemetry: Queries `pg_stat_replication`, `pg_replication_slots`, `pg_is_in_recovery()`, `pg_last_wal_receive_lsn()`, `pg_last_wal_replay_lsn()`, and `pg_wal_lsn_diff` on live PostgreSQL clusters.
+  2. Deterministic Simulation Mode: Supports automated DR verification in SQLite/test environments via the `sangyan_replication_state` ledger table.
+  3. Standby Health & SLA Validation: `validate_standby_health()` validates that byte lag and replay lag seconds remain strictly within configured bounds (`max_lag_bytes = 10 MB`, `max_lag_sec = 10.0s`).
+- Why: Provides real-time visibility into replication health and prevents failover to out-of-sync standby replicas.
+- Alternatives considered: Relying solely on external pg_stat scripts (rejected: fragments disaster recovery tooling and prevents automated pre-failover checks).
+- Consequences: Integrated, automated replication health monitoring accessible via Python API and CLI.
+- Files: `sangyan/database/replication.py`, `sangyan/cli.py`, `tests/test_phase11_postgres_replication.py`
+
+---
+
+### D-087: Zero-Data-Loss Controlled Switchover State Machine & Split-Brain Integration
+- Date / phase / commit: 2026-10-04, Phase 11
+- Context: Planned maintenance, regional migrations, or cloud provider evacuations require zero-data-loss controlled switchover between primary and standby regions without causing split-brain dual writers or breaking the linear SHA3-256 audit ledger.
+- Decision: Implemented controlled switchover state machine in `PostgresReplicationManager` and `DisasterRecoveryManager` (`sangyan/database/replication.py`):
+  1. Pre-Switchover Health Guard: Validates that the target standby replica is active and within replication lag thresholds (`lag_bytes <= threshold`, `lag_seconds <= threshold`). Switchovers are refused if replication is unhealthy.
+  2. Demotion & Split-Brain Fencing: Old primary region is atomically fenced in `sangyan_region_fencing` (`role = DEMOTED`), immediately revoking write authority and rejecting any subsequent client writes with `StaleRegionError`.
+  3. Standby Promotion & Epoch Progression: Target standby replica is promoted to `PRIMARY_ACTIVE` via `pg_promote()` (or simulated promotion) and the global cluster epoch is incremented monotonically (`epoch = epoch + 1`).
+  4. Audit Ledger Continuity: Validates that the SHA3-256 cryptographic hash chain remains linear and unbroken across the switchover boundary.
+- Why: Guarantees zero data loss (RPO = 0s in replication SLA) and instantaneous split-brain prevention during planned regional transfers.
+- Alternatives considered: Asynchronous uncoordinated promotion (rejected: leads to split-brain writes and audit chain divergence).
+- Consequences: Safe, deterministic, zero-data-loss controlled regional switchovers.
+- Files: `sangyan/database/replication.py`, `sangyan/dr/manager.py`, `tests/test_phase11_postgres_replication.py`
+
+---
+
+### D-088: Comprehensive Operational CLI & Distributed Database Tooling (`sangyan db`)
+- Date / phase / commit: 2026-10-04, Phase 11
+- Context: Platform operators require standardized, safe CLI commands to inspect replication status, trigger standby promotion, and execute controlled switchovers during disaster recovery drills or emergency operations.
+- Decision: Implemented the `@cli.group("db")` operational command suite (`sangyan/cli.py`):
+  1. `sangyan db replication-status`: Displays current node role (`PRIMARY` / `STANDBY`), in-recovery flag, current LSN, primary replication slot name, replication lag (bytes and seconds), standby health status, and diagnostic details.
+  2. `sangyan db promote --region <target> --confirm`: Idempotently promotes a standby database replica to read-write primary and advances cluster epoch in `sangyan_region_fencing`. Requires explicit `--confirm` flag to prevent accidental invocation.
+  3. `sangyan db switchover --primary <old> --standby <new> --confirm`: Executes safe zero-data-loss switchover from primary to standby, performing pre-flight lag validation, old primary demotion, standby promotion, and epoch increment.
+- Why: Provides operators with safe, auditable command-line primitives for disaster recovery execution.
+- Alternatives considered: Requiring direct SQL execution or psql scripting (rejected: high risk of operator error during emergency failover scenarios).
+- Consequences: Standardized, fail-safe operator command suite for database replication and regional failover.
+- Files: `sangyan/cli.py`, `tests/test_phase11_postgres_replication.py`

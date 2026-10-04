@@ -709,5 +709,128 @@ def task_prune(older_than_days: float, status: Optional[str], org: Optional[str]
     click.echo(click.style(f"Retention prune complete: {deleted} task row(s) removed.", fg="green"))
 
 
+# ---------------------------------------------------------------------------
+# Database Physical Streaming Replication & DR Switchover CLI Group
+# ---------------------------------------------------------------------------
+
+@cli.group("db")
+def db_group():
+    """Database operations, physical streaming replication, and promotion tooling."""
+    pass
+
+
+@db_group.command("replication-status")
+def db_replication_status():
+    """Inspect PostgreSQL physical WAL streaming replication status and lag."""
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+
+    from sangyan.database.replication import PostgresReplicationManager
+
+    manager = PostgresReplicationManager(
+        engine=engine,
+        primary_slot=config.pg_replication_primary_slot,
+        max_lag_bytes=config.pg_replication_max_lag_bytes,
+        max_lag_sec=config.pg_replication_max_lag_sec,
+    )
+    status = manager.get_replication_status()
+    health = manager.validate_standby_health()
+
+    click.echo(click.style("=== PostgreSQL Physical Replication Status ===", fg="cyan", bold=True))
+    click.echo(f"  Role:             {status.get('role')}")
+    click.echo(f"  In Recovery:      {status.get('in_recovery')}")
+    click.echo(f"  Current LSN:      {status.get('current_lsn', status.get('replay_lsn'))}")
+    click.echo(f"  Primary Slot:     {config.pg_replication_primary_slot}")
+    click.echo(f"  Lag Bytes:        {health.get('lag_bytes', 0)}")
+    click.echo(f"  Lag Seconds:      {health.get('lag_seconds', 0.0):.2f}s")
+    health_color = "green" if health.get("healthy") else "red"
+    click.echo(f"  Standby Health:   {click.style('HEALTHY' if health.get('healthy') else 'UNHEALTHY', fg=health_color, bold=True)}")
+    click.echo(f"  Details:          {health.get('details')}")
+
+
+@db_group.command("promote")
+@click.option("--region", required=True, help="Target region ID being promoted to primary")
+@click.option("--confirm", is_flag=True, default=False, help="Confirm standby promotion")
+def db_promote(region: str, confirm: bool):
+    """Promote standby database to primary and advance DR cluster epoch."""
+    if not confirm:
+        click.echo(click.style(f"Refused: --confirm required to promote standby region '{region}'.", fg="red"), err=True)
+        sys.exit(1)
+
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+
+    from sangyan.database.replication import PostgresReplicationManager
+    from sangyan.dr.manager import DisasterRecoveryManager
+
+    dr_mgr = DisasterRecoveryManager(
+        engine=engine,
+        region_id=config.region_id,
+        default_role=config.dr_role,
+        default_epoch=config.dr_cluster_epoch,
+    )
+    manager = PostgresReplicationManager(
+        engine=engine,
+        primary_slot=config.pg_replication_primary_slot,
+    )
+
+    try:
+        report = manager.promote_standby(dr_manager=dr_mgr, target_region=region)
+        click.echo(click.style(f"Standby in region '{region}' promoted successfully.", fg="green", bold=True))
+        click.echo(f"  Status:       {report.get('status')}")
+        click.echo(f"  Promoted At:  {report.get('promoted_at')}")
+    except Exception as exc:
+        click.echo(click.style(f"Promotion failed: {exc}", fg="red"), err=True)
+        sys.exit(1)
+
+
+@db_group.command("switchover")
+@click.option("--primary", required=True, help="Currently active primary region to demote")
+@click.option("--standby", required=True, help="Standby region to promote to active primary")
+@click.option("--confirm", is_flag=True, default=False, help="Confirm controlled switchover")
+def db_switchover(primary: str, standby: str, confirm: bool):
+    """Execute controlled zero-data-loss switchover between primary and standby regions."""
+    if not confirm:
+        click.echo(click.style(f"Refused: --confirm required to execute switchover from '{primary}' to '{standby}'.", fg="red"), err=True)
+        sys.exit(1)
+
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+
+    from sangyan.database.replication import PostgresReplicationManager
+    from sangyan.dr.manager import DisasterRecoveryManager
+
+    dr_mgr = DisasterRecoveryManager(
+        engine=engine,
+        region_id=config.region_id,
+        default_role=config.dr_role,
+        default_epoch=config.dr_cluster_epoch,
+    )
+    manager = PostgresReplicationManager(
+        engine=engine,
+        primary_slot=config.pg_replication_primary_slot,
+    )
+
+    try:
+        report = manager.controlled_switchover(
+            dr_manager=dr_mgr,
+            primary_region=primary,
+            standby_region=standby,
+        )
+        click.echo(click.style("Controlled switchover completed successfully.", fg="green", bold=True))
+        click.echo(f"  Old Primary:  {report.get('old_primary')}")
+        click.echo(f"  New Primary:  {report.get('new_primary')}")
+        click.echo(f"  New Epoch:    {report.get('new_epoch')}")
+    except Exception as exc:
+        click.echo(click.style(f"Switchover failed: {exc}", fg="red"), err=True)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()

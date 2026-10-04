@@ -156,8 +156,52 @@ Phase 10 — Production Hardening, Load Validation, Observability & Operational 
 - Injection & Payloads: Malicious nested JSON, oversized payloads (>2 MB), SQL characters, and prompt injection strings are safely handled by Pydantic validation and parameterized queries.
 - Secret Sanitization: Repository-wide audit verified zero hardcoded secrets, no passwords or tokens in logs, span attributes, dead-letter records, or metrics.
 
-## 12. Next Phase / Immediate Priorities
-- **Phase 11: Real-Time Telemetry Streaming & Hardware Security Module (HSM) Integration**:
-  - Server-Sent Events (SSE) / WebSocket endpoints for real-time investigation graph node progress updates to analyst dashboards.
-  - Integration with PKCS#11 / HSM hardware providers for root ML-DSA-65 post-quantum signing key isolation.
-  - Active-passive physical database streaming replication tooling for multi-cloud deployments.
+## 12. Phase 11: Final Feature Completion & Production Readiness
+
+### 12.1 Phase 11 Verification Summary
+```text
+Total Test Suite: 394 passed, 0 failures, 3 deprecation warnings
+Execution Duration: 155.27s
+Baseline Phases 1–8: 239 passed
+Phase 9:              36 passed
+Phase 10:             96 passed
+Phase 11:             23 passed
+--------------------------------------------------------------
+Total:               394 passed (100% clean)
+```
+
+### 12.2 Phase 11 Delivered Features
+1. **Real-Time Investigation Progress Streaming (Server-Sent Events)**:
+   - Dedicated unidirectional HTTP `text/event-stream` endpoint: `GET /api/v1/investigations/{investigation_id}/events`.
+   - Bounded in-memory queue (`asyncio.Queue(maxsize=1000)`) with non-blocking backpressure that never stalls workflow graph execution nodes.
+   - Monotonic sequence numbering and client disconnection recovery via `Last-Event-ID` / `?after_sequence=N`.
+   - Durable event persistence in `sangyan_investigation_events` (Migration 007) for historical replay: `GET /api/v1/investigations/{id}/events/history`.
+   - Periodic keep-alive heartbeats (`: keep-alive\n\n`) preventing reverse proxy connection drops.
+   - Interactive 10-step progress stepper and native `EventSource` client integrated into HTML inspection view (`GET /inspect/investigation/{id}`).
+2. **PKCS#11 Hardware Security Module (HSM) Signing Architecture**:
+   - `SigningProvider` abstraction supporting `SoftwareSigningProvider`, `PKCS11SimulatorSigningProvider`, and native `PKCS11SigningProvider`.
+   - Hardware private key isolation: private keys are generated and held on-token; calls to extract private key attributes raise `CryptoError("CKR_ATTRIBUTE_SENSITIVE")`.
+   - PKCS#11 PIN authentication and session lifecycle management (`C_Login`, `C_Logout`, `C_CloseSession`).
+   - Fail-closed native dynamic linker: if configured PKCS#11 shared library is missing or invalid, application boot fails immediately rather than silently falling back to software.
+   - Key rotation without invalidating historical trust receipts: historical receipts record `signing_key_id` and continue to verify validly post-rotation.
+3. **PostgreSQL Physical Streaming Replication Tooling & Zero-Data-Loss Switchover**:
+   - `PostgresReplicationManager` querying native PostgreSQL replication telemetry (`pg_stat_replication`, `pg_is_in_recovery()`, `pg_replication_slots`, LSNs, byte and second lag) or deterministic simulation (`sangyan_replication_state`).
+   - Standby replication health and lag threshold validation (`max_lag_bytes`, `max_lag_sec`).
+   - Zero-data-loss controlled switchover state machine: pre-flight lag check, old primary demotion and fencing (`DEMOTED`), standby promotion via `pg_promote()`, cluster epoch increment, and linear audit hash chain continuity verification.
+   - Production CLI group `@cli.group("db")` with `sangyan db replication-status`, `sangyan db promote --region <r> --confirm`, and `sangyan db switchover --primary <p> --standby <s> --confirm`.
+4. **End-to-End Operational Lifecycle Acceptance**:
+   - 26-step comprehensive lifecycle test (`tests/test_phase11_e2e_lifecycle.py`) verifying schema migrations, HSM signing, event streaming, review gate pause/resume, key rotation, replication monitoring, DR switchover, split-brain rejection, and audit ledger integrity.
+
+### 12.3 Phase 11 Operational Runbook
+- Real-Time Investigation Streaming:
+  - Stream events: `curl -N -H "Authorization: Bearer <token>" http://localhost:8000/api/v1/investigations/<id>/events`
+  - Stream with replay: `curl -N -H "Authorization: Bearer <token>" -H "Last-Event-ID: 5" http://localhost:8000/api/v1/investigations/<id>/events`
+  - View interactive stepper: Browser navigate to `http://localhost:8000/inspect/investigation/<id>`
+- Database Replication & Switchover:
+  - Inspect replication lag and status: `sangyan db replication-status`
+  - Promote standby replica: `sangyan db promote --region <standby-region-id> --confirm`
+  - Execute controlled switchover: `sangyan db switchover --primary <current-primary> --standby <standby-region-id> --confirm`
+- HSM / PKCS#11 Configuration:
+  - Set `SANGYAN_SIGNING_PROVIDER=pkcs11_simulator` (for test/simulation) or `pkcs11` (for production HSM).
+  - Configure `SANGYAN_PKCS11_LIB_PATH=/usr/lib/softhsm/libsofthsm2.so` (or vendor PKCS#11 module path).
+  - Configure `SANGYAN_PKCS11_PIN=<secure-pin>` and `SANGYAN_PKCS11_SLOT_ID=0`.

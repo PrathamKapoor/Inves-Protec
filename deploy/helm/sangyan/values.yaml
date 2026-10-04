@@ -146,6 +146,17 @@ config:
   drRole: "PRIMARY_ACTIVE"
   drClusterEpoch: 1
   drFencingEnabled: "true"
+  # Phase 11: Real-time events, HSM signing provider, and PostgreSQL replication
+  signingProvider: "software"
+  signingKeyId: "default"
+  pkcs11LibPath: ""
+  pkcs11SlotId: 0
+  pkcs11TokenLabel: "Sangyan-ML-DSA-HSM"
+  realtimeEventsEnabled: "true"
+  realtimeHeartbeatSec: 15.0
+  pgReplicationPrimarySlot: "sangyan_standby_slot"
+  pgReplicationMaxLagBytes: 10485760
+  pgReplicationMaxLagSec: 10.0
 
 # Asynchronous Task Worker deployment
 worker:

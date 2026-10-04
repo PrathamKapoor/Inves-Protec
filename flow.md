@@ -826,3 +826,94 @@ Client Submission (POST /workflow/start?async_exec=true)
 | Kubernetes Hardening & PDB | PodDisruptionBudget, rolling update strategy, 120s worker drain, and migration lock safety | `deploy/helm/sangyan/`, `sangyan/async_exec/worker.py` | 1868ee5 | D-079 |
 | Controlled DR Failback | Safe multi-stage failback state machine, monotonic epoch progression, and audit continuity | `sangyan/dr/manager.py`, `sangyan/cli.py` | 1868ee5 | D-080 |
 | Phase 10 Verification Suite | 96 new tests covering load, backpressure, backup drill, CLI, failback, full DR, k8s, security, stress | `tests/test_phase10_*.py` | 1868ee5 | D-074..D-080 |
+| Real-Time SSE Event Streaming | Monotonic sequenced event stream over HTTP text/event-stream with replay and backpressure | `sangyan/realtime/broker.py`, `sangyan/realtime/models.py` | current | D-081 |
+| Migration 007 & Schema Evolution | sangyan_investigation_events, sangyan_replication_state, and signing_key_id on trust receipts | `sangyan/database/migrations.py` | current | D-082 |
+| Interactive Visual Stepper | Server-rendered HTML inspection view with real-time 10-stage stepper and EventSource client | `sangyan/api/views.py` | current | D-083 |
+| PKCS#11 HSM Signing Provider | NIST FIPS 204 ML-DSA-65 hardware token signing abstraction, PIN auth, and CKR_ATTRIBUTE_SENSITIVE isolation | `sangyan/crypto/signing_provider.py` | current | D-084 |
+| Fail-Closed Native Dynamic Linking | Native CDLL PKCS#11 loader with strict fail-closed policy and non-extractable key rotation | `sangyan/crypto/signing_provider.py`, `sangyan/config.py` | current | D-085 |
+| PostgreSQL WAL Streaming Replication | PostgresReplicationManager monitoring pg_stat_replication, lag thresholds, and standby health | `sangyan/database/replication.py` | current | D-086 |
+| Zero-Data-Loss Controlled Switchover | Multi-stage switchover state machine: lag check, old primary fence, standby promotion, epoch advance | `sangyan/database/replication.py`, `sangyan/dr/manager.py` | current | D-087 |
+| Database Operational CLI Tooling | sangyan db replication-status, promote, switchover commands with confirmation flags | `sangyan/cli.py` | current | D-088 |
+| Phase 11 Verification Suite | 23 comprehensive tests covering SSE streaming, HSM signing, replication, and 26-step lifecycle (total 394 tests) | `tests/test_phase11_*.py` | current | D-081..D-088 |
+
+---
+
+## 15. Phase 11: Real-Time Investigation Streaming, HSM Integration & Database Replication Architecture
+
+```
+                                  [ ANALYST BROWSER ]
+                                           │
+                        GET /events (SSE)  │  GET /inspect/investigation/{id}
+                                           ▼
+                                 ┌───────────────────┐
+                                 │   FastAPI Web     │
+                                 │   SSE Endpoint    │
+                                 └─────────┬─────────┘
+                                           │ Subscribe (bounded Queue)
+                                           ▼
+┌───────────────────────┐        ┌───────────────────┐        ┌────────────────────────┐
+│  Workflow Execution   ├───────►│ Investigation     ├───────►│ sangyan_investigation  │
+│  (10 Pipeline Stages) │ Emit   │ Event Broker      │ Store  │ _events (relational    │
+└───────────────────────┘        └───────────────────┘        │ outbox & replay log)   │
+                                                              └────────────────────────┘
+
+                                  [ CRYPTOGRAPHIC SIGNING ]
+                                           │
+                                           ▼
+                                 ┌───────────────────┐
+                                 │  SigningProvider  │
+                                 │    (Interface)    │
+                                 └─────────┬─────────┘
+                                           │
+                    ┌──────────────────────┴──────────────────────┐
+                    ▼                                             ▼
+         ┌─────────────────────┐                       ┌─────────────────────┐
+         │ SoftwareSigning     │                       │ PKCS11Signing       │
+         │ Provider (local)    │                       │ Provider / Simulator│
+         └─────────────────────┘                       └──────────┬──────────┘
+                                                                  │
+                                                                  ▼
+                                                       ┌─────────────────────┐
+                                                       │ Hardware Security   │
+                                                       │ Module (HSM) Token  │
+                                                       │ CKR_ATTR_SENSITIVE  │
+                                                       └─────────────────────┘
+
+                                  [ REPLICATION & DR SWITCHOVER ]
+                                           │
+                                           ▼
+         ┌───────────────────────────────────────────────────────────────────┐
+         │                    PostgresReplicationManager                     │
+         │   (pg_stat_replication, pg_is_in_recovery, lag bytes & seconds)   │
+         └──────────────────┬─────────────────────────────┬──────────────────┘
+                            │                             │
+                            ▼                             ▼
+                 ┌────────────────────┐        ┌────────────────────┐
+                 │  Primary Region    │  WAL   │  Standby Region    │
+                 │  (Epoch E)         ├───────►│  (Epoch E+1)       │
+                 │  DEMOTED / FENCED  │ Stream │  PROMOTED PRIMARY  │
+                 └────────────────────┘        └────────────────────┘
+```
+
+### 15.1 Real-Time Server-Sent Events (SSE) Investigation Streaming Flow
+1. **Unidirectional SSE Protocol**: The client connects via HTTP to `GET /api/v1/investigations/{id}/events` requesting `text/event-stream`.
+2. **Replay Monotonicity**: If the client provides a `Last-Event-ID` header or `after_sequence` query parameter, the broker queries `sangyan_investigation_events` and immediately streams all missed events in strict sequence order before attaching to the live subscriber feed.
+3. **Non-Blocking Backpressure**: Live event delivery uses an asynchronous non-blocking queue (`asyncio.Queue(maxsize=1000)`). Slow subscribers drop stale frames without delaying workflow execution nodes or blocking worker threads.
+4. **Heartbeat Keep-Alive**: When no stage events are emitted for 15 seconds, a `: keep-alive\n\n` comment packet is sent to prevent intermediate reverse proxies or edge gateways from dropping the connection.
+5. **Tenancy Guardrail**: The endpoint enforces strict tenant scoping. A client cannot subscribe to or replay events belonging to another organization.
+
+### 15.2 PKCS#11 Hardware Security Module (HSM) Signing Architecture
+1. **Interface Decoupling**: `TrustService` delegates all digital signature operations to a `SigningProvider` implementation.
+2. **Private Key Isolation**: Under `PKCS11SigningProvider` and `PKCS11SimulatorSigningProvider`, private keys are generated and stored strictly within the hardware token. Private key attributes cannot be exported by application code; any attempt raises `CryptoError("CKR_ATTRIBUTE_SENSITIVE")`.
+3. **Fail-Closed Semantics**: When native PKCS#11 is configured, missing shared libraries, incorrect PINs, or token communication errors immediately fail closed. Silent fallbacks to software signing in production are strictly forbidden.
+4. **Key Rotation & Verification Continuity**: The provider supports rotating the active signing key handle. Historical trust receipts record their specific `signing_key_id` and continue to verify validly against their original public key.
+
+### 15.3 PostgreSQL Physical Streaming Replication & DR Switchover Tooling
+1. **Telemetry & Lag Health**: `PostgresReplicationManager` queries PostgreSQL native views (`pg_stat_replication`, `pg_is_in_recovery()`, `pg_last_wal_receive_lsn()`, `pg_last_wal_replay_lsn()`) to measure byte and second lag.
+2. **SLA Validation**: `validate_standby_health()` validates that standby replay lag is within bounds (`max_lag_bytes = 10 MB`, `max_lag_sec = 10.0s`).
+3. **Controlled Switchover Protocol**:
+   - Step 1: Validate standby health and confirm replication lag is within SLA.
+   - Step 2: Demote the active primary region in `sangyan_region_fencing` (`role = DEMOTED`), fencing it against subsequent client writes (`StaleRegionError`).
+   - Step 3: Promote standby replica via `pg_promote()` and increment cluster epoch in `sangyan_region_fencing`.
+   - Step 4: Reconcile linear cryptographic audit continuity across the failover boundary.
+4. **Operator CLI**: Accessible via `sangyan db replication-status`, `sangyan db promote --region <r> --confirm`, and `sangyan db switchover --primary <p> --standby <s> --confirm`.

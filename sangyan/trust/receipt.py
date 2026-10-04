@@ -20,6 +20,7 @@ class TrustReceipt:
     signature: bytes
     id: str = field(default_factory=lambda: new_id("rcpt"))
     created_at: float = field(default_factory=time.time)
+    signing_key_id: str = "default"
 
     def to_dict(self) -> dict:
         return {
@@ -31,6 +32,7 @@ class TrustReceipt:
             "content_digest": self.content_digest,
             "signature_b64": base64.b64encode(self.signature).decode("ascii"),
             "created_at": self.created_at,
+            "signing_key_id": self.signing_key_id,
         }
 
     @classmethod
@@ -44,4 +46,5 @@ class TrustReceipt:
             content_digest=d["content_digest"],
             signature=base64.b64decode(d["signature_b64"]),
             created_at=float(d.get("created_at", time.time())),
+            signing_key_id=d.get("signing_key_id", "default"),
         )

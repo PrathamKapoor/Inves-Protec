@@ -19,6 +19,8 @@ from sangyan.workflow.errors import (
     TenantMismatchError,
     WorkflowError,
 )
+from sangyan.realtime.broker import get_event_broker
+from sangyan.realtime.models import InvestigationEventType
 from sangyan.workflow.graph import InvestigationWorkflow
 from sangyan.workflow.nodes import WorkflowNodeSuite
 from sangyan.workflow.state import InvestigationWorkflowState, create_initial_workflow_state
@@ -33,10 +35,15 @@ class WorkflowService:
         workflow: Optional[InvestigationWorkflow] = None,
         checkpointer: Optional[WorkflowCheckpointer] = None,
         node_suite: Optional[WorkflowNodeSuite] = None,
+        event_broker: Optional[Any] = None,
     ) -> None:
         self.repository_factory = repository_factory
         self.checkpointer = checkpointer or WorkflowCheckpointer(in_memory=True)
-        self.node_suite = node_suite or WorkflowNodeSuite(repository_factory=repository_factory)
+        self.event_broker = event_broker or get_event_broker()
+        self.node_suite = node_suite or WorkflowNodeSuite(
+            repository_factory=repository_factory,
+            event_broker=self.event_broker,
+        )
         self.workflow = workflow or InvestigationWorkflow(
             node_suite=self.node_suite,
             checkpointer=self.checkpointer.get_saver(),
@@ -118,6 +125,17 @@ class WorkflowService:
             result="RUNNING",
             metadata={"thread_id": th_id, "run_id": r_id, "content_count": len(content_items)},
         )
+
+        try:
+            (self.event_broker or get_event_broker()).publish(
+                investigation_id=inv_id,
+                organization_id=organization_id,
+                event_type=InvestigationEventType.INVESTIGATION_STARTED,
+                node_name="start",
+                payload={"run_id": r_id, "content_count": len(content_items), "require_review": require_review},
+            )
+        except Exception:
+            pass
 
         # Execute graph
         try:
@@ -241,6 +259,17 @@ class WorkflowService:
 
         # Update WorkflowRun status
         repo.update_workflow_run(wf_run.id, status="RUNNING", current_node="review_gate_node")
+
+        try:
+            (self.event_broker or get_event_broker()).publish(
+                investigation_id=investigation_id,
+                organization_id=organization_id,
+                event_type=InvestigationEventType.REVIEW_SUBMITTED,
+                node_name="resume",
+                payload={"action": review_action, "reviewer_id": user_id, "reason": reason},
+            )
+        except Exception:
+            pass
 
         # Resume execution in LangGraph; on failure, revert the investigation to
         # AWAITING_REVIEW so transient errors (worker crash, registry outage,

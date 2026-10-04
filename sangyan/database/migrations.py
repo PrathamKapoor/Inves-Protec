@@ -429,6 +429,48 @@ MIGRATION_006_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_retry_due ON sangyan_async_tasks(status, next_attempt_at)",
 )
 
+MIGRATION_007_STATEMENTS: tuple[str, ...] = (
+    # Real-time investigation event stream buffer: durable operational projection
+    # enabling SSE / WebSocket client reconnect replay via Last-Event-ID.
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_investigation_events (
+        id TEXT PRIMARY KEY,
+        investigation_id TEXT NOT NULL,
+        workflow_run_id TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        timestamp REAL NOT NULL,
+        status TEXT NOT NULL,
+        stage TEXT NOT NULL DEFAULT '',
+        progress_pct INTEGER NOT NULL DEFAULT 0,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at REAL NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_inv_events_inv_seq ON sangyan_investigation_events(investigation_id, sequence)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_inv_events_org ON sangyan_investigation_events(organization_id)",
+    # Physical PostgreSQL replication & multi-node health tracking
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_replication_state (
+        node_id TEXT PRIMARY KEY,
+        role TEXT NOT NULL DEFAULT 'STANDBY',
+        cluster_epoch INTEGER NOT NULL DEFAULT 1,
+        wal_lsn TEXT,
+        replay_lsn TEXT,
+        lag_bytes INTEGER NOT NULL DEFAULT 0,
+        lag_seconds REAL NOT NULL DEFAULT 0.0,
+        last_heartbeat_at REAL NOT NULL,
+        is_healthy INTEGER NOT NULL DEFAULT 1,
+        metadata TEXT NOT NULL DEFAULT '{}'
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_repl_role ON sangyan_replication_state(role)",
+    # Cryptographic key rotation: track signing key identifier on trust receipts
+    "ALTER TABLE sangyan_trust_receipts ADD COLUMN signing_key_id TEXT NOT NULL DEFAULT 'default'",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_trust_key_id ON sangyan_trust_receipts(signing_key_id)",
+)
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_sangyan_core_tables", MIGRATION_001_STATEMENTS),
     Migration(2, "create_sangyan_correlation_and_guidance_tables", MIGRATION_002_STATEMENTS),
@@ -436,6 +478,7 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(4, "create_sangyan_api_keys_table", MIGRATION_004_STATEMENTS),
     Migration(5, "create_sangyan_async_tasks_and_dr_tables", MIGRATION_005_STATEMENTS),
     Migration(6, "add_task_retry_scheduling_column", MIGRATION_006_STATEMENTS),
+    Migration(7, "create_phase11_realtime_events_and_replication_tables", MIGRATION_007_STATEMENTS),
 )
 
 

@@ -128,6 +128,10 @@ config:
   jwtLeeway: 30
   rateLimitEnabled: "true"
   maxRequestBodyBytes: 2097152
+  signingProvider: "pkcs11_simulator"
+  signingKeyId: "hsm-dist-key"
+  realtimeEventsEnabled: "true"
+  pgReplicationPrimarySlot: "sangyan_standby_slot"
 
 secrets:
   existingSecretName: "sangyan-cluster-secrets"

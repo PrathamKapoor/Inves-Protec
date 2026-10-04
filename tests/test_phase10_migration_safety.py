@@ -44,11 +44,11 @@ def _apply_partial(engine, up_to_version: int) -> None:
             )
 
 
-def test_empty_database_reaches_version_6(engine):
+def test_empty_database_reaches_latest_version(engine):
     runner = MigrationRunner(engine)
     applied = runner.migrate()
-    assert len(applied) == 6
-    assert runner.status()["current_version"] == 6
+    assert len(applied) == 7
+    assert runner.status()["current_version"] == 7
     assert runner.is_up_to_date()
 
     # New retry scheduling column and index exist
@@ -75,10 +75,13 @@ def test_phase9_schema_upgrades_preserving_rows(engine):
         ("tsk-legacy", "org-1", "usr-1", "inv-1", "WORKFLOW_START", "QUEUED", "{}", 1.0, 1.0),
     )
 
-    # 2. Run the real migration runner: only 006 applies
+    # 2. Run the real migration runner: 006 and 007 apply
     runner = MigrationRunner(engine)
     applied = runner.migrate()
-    assert applied == ["006_add_task_retry_scheduling_column"]
+    assert applied == [
+        "006_add_task_retry_scheduling_column",
+        "007_create_phase11_realtime_events_and_replication_tables",
+    ]
     assert runner.is_up_to_date()
 
     # 3. Legacy row preserved with NULL next_attempt_at and remains queryable
@@ -93,13 +96,13 @@ def test_migration_rerun_is_idempotent(engine):
     runner.migrate()
     again = runner.migrate()
     assert again == []
-    assert runner.status()["current_version"] == 6
+    assert runner.status()["current_version"] == 7
 
 
 def test_migration_statements_are_ordered_and_newest_is_006():
     versions = [m.version for m in MIGRATIONS]
     assert versions == sorted(versions)
-    assert versions == [1, 2, 3, 4, 5, 6]
+    assert versions == [1, 2, 3, 4, 5, 6, 7]
     # DDL in migration 6 must be additive (never rewrites historical tables)
     joined = " ".join(MIGRATION_006_STATEMENTS)
     assert "ALTER TABLE sangyan_async_tasks ADD COLUMN next_attempt_at REAL" in joined
@@ -116,8 +119,8 @@ def test_concurrent_migrate_applies_exactly_once(tmp_path):
             results = [f.result() for f in [pool.submit(run) for _ in range(4)]]
 
         total_applied = sum(len(r) for r in results)
-        assert total_applied == 6  # no double-apply
+        assert total_applied == 7  # no double-apply
         runner = MigrationRunner(eng)
-        assert runner.applied_versions() == [1, 2, 3, 4, 5, 6]
+        assert runner.applied_versions() == [1, 2, 3, 4, 5, 6, 7]
     finally:
         eng.close()

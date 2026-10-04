@@ -12,6 +12,13 @@ from sangyan.crypto.providers import (
     SignatureProvider,
     get_signature_provider,
 )
+from sangyan.crypto.signing_provider import (
+    PKCS11SimulatorSigningProvider,
+    PKCS11SigningProvider,
+    SigningProvider,
+    SoftwareSigningProvider,
+    create_signing_provider,
+)
 
 __all__ = [
     "sha3_hex",
@@ -23,4 +30,9 @@ __all__ = [
     "SignatureProvider",
     "SIGNATURE_PROVIDERS",
     "get_signature_provider",
+    "SigningProvider",
+    "SoftwareSigningProvider",
+    "PKCS11SimulatorSigningProvider",
+    "PKCS11SigningProvider",
+    "create_signing_provider",
 ]

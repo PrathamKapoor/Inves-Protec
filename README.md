@@ -47,31 +47,36 @@ SANGYAN is an evidence-grounded investor safety and content intelligence platfor
 C:\Projects\Sangyan/
 ├── sangyan/                    # Core Python application package
 │   ├── api/                    # FastAPI routes, views, security middlewares, lifespan
-│   ├── cli.py                  # Operational CLI (serve, migrate, backup, restore, health)
+│   ├── async_exec/             # Async task models, Redis Streams, leasing, workers
+│   ├── cli.py                  # Operational CLI (serve, migrate, backup, dr, task, db)
 │   ├── config.py               # Unified SangyanConfig loader & production validator
 │   ├── core/                   # Errors, logging, identifiers
 │   ├── correlation/            # Graph correlator, scam chains, taxonomy, guidance, explainer
-│   ├── crypto/                 # Post-quantum cryptography (ML-DSA-65, SHA3-256)
-│   ├── database/               # DatabaseEngine, migrations, and BackupManager
+│   ├── crypto/                 # Post-quantum cryptography (ML-DSA-65), PKCS#11 / HSM
+│   ├── database/               # DatabaseEngine, migrations 001-007, replication, backups
 │   ├── domain/                 # Investor-safety domain records & validation
+│   ├── dr/                     # Active-passive DR manager, split-brain fencing, epochs
 │   ├── ingest/                 # Text cleaner, bounded streaming fetcher, SSRF security
 │   ├── intelligence/           # Multilingual detection, claims, entities, signals
+│   ├── realtime/               # Real-time SSE event broker, streaming models, replay
 │   ├── security/               # Auth gateway (JWT/API key), RBAC, rate limiter, telemetry
 │   ├── tenancy/                # Multi-tenancy, memberships, sessions, repository
-│   ├── trust/                  # PQC receipts & verification service
+│   ├── trust/                  # PQC receipts & verification service, key rotation
 │   ├── verification/           # Authoritative sources, snapshots, adapters, conflict resolver
-│   └── workflow/               # LangGraph StateGraph, SQLite WAL checkpointer, review gate
+│   └── workflow/               # LangGraph StateGraph, durable checkpointer, review gate
 ├── deploy/
-│   └── helm/sangyan/           # Production Helm chart (Deployment, Job, CronJob, Ingress)
-├── tests/                      # Comprehensive test suite (205 tests)
+│   ├── helm/sangyan/           # Production Helm chart (Deployment, Worker, HPA, PDB)
+│   └── observability/          # Grafana dashboard & Prometheus Alertmanager rules
+├── tests/                      # Comprehensive test suite (394 tests)
 ├── Dockerfile                  # CIS-hardened non-root multi-stage production container
 ├── docker-compose.yml          # Production Compose stack with volume mounts
+├── docker-compose.distributed.yml # Distributed multi-pod Compose environment
 ├── .dockerignore               # Strict build context exclusion
 ├── .env.example                # Production environment template
-├── decisions.md                # Append-only architectural decision log (D-001..D-058)
-├── flow.md                     # Runtime execution and call flows
-├── handoff.md                  # Development phase state & handoff record
-├── MODEL_CHANGES.md            # Domain models, schema contracts, and schemas
+├── decisions.md                # Append-only architectural decision log (D-001..D-088)
+├── flow.md                     # Runtime execution, call flows, and Phase 1-11 architecture
+├── handoff.md                  # Development phase state & operational runbooks
+├── MODEL_CHANGES.md            # Domain models, schema contracts, and migrations 001-007
 └── pyproject.toml              # Project manifest and dependencies (v0.7.0)
 ```
 
@@ -94,7 +99,7 @@ pip install -e ".[dev]"
 ```bash
 python -m pytest tests/ -v
 ```
-All 205 tests should pass cleanly.
+All 394 tests should pass cleanly (0 failures, 0 regressions).
 
 ---
 
@@ -420,6 +425,40 @@ python -m sangyan.cli load-test \
 # (Dead letters and audit logs are never pruned)
 python -m sangyan.cli task prune --older-than-days 30 --confirm
 ```
+
+### 11. Database Streaming Replication & DR Switchover (`sangyan db`)
+```bash
+# Inspect PostgreSQL physical WAL streaming replication lag and standby health
+python -m sangyan.cli db replication-status
+
+# Promote a standby database replica to read-write primary (increments DR epoch)
+python -m sangyan.cli db promote --region ap-south-2 --confirm
+
+# Execute zero-data-loss controlled switchover between primary and standby regions
+python -m sangyan.cli db switchover --primary ap-south-1 --standby ap-south-2 --confirm
+```
+
+### 12. Real-Time Investigation Progress Streaming (Server-Sent Events)
+```bash
+# Live stream investigation stage events over standard HTTP text/event-stream
+curl -N -H "Authorization: Bearer <TOKEN>" \
+  http://localhost:8000/api/v1/investigations/<INVESTIGATION_ID>/events
+
+# Replay missed events following disconnection using Last-Event-ID header
+curl -N -H "Authorization: Bearer <TOKEN>" \
+  -H "Last-Event-ID: 4" \
+  http://localhost:8000/api/v1/investigations/<INVESTIGATION_ID>/events
+
+# Visual Inspection UI with live 10-stage stepper
+# Open in browser: http://localhost:8000/inspect/investigation/<INVESTIGATION_ID>
+```
+
+### 13. Hardware Security Module (HSM) PKCS#11 Cryptographic Signing
+- Configure `SANGYAN_SIGNING_PROVIDER=pkcs11` (or `pkcs11_simulator` for local validation).
+- Configure `SANGYAN_PKCS11_LIB_PATH=/usr/lib/softhsm/libsofthsm2.so` and `SANGYAN_PKCS11_PIN=<PIN>`.
+- Private keys remain strictly isolated within hardware tokens (`CKR_ATTRIBUTE_SENSITIVE`).
+- Fail-closed verification prevents silent fallback to software signing.
+- Key rotation preserves indefinite forensic validity of historical trust receipts via indexed `signing_key_id`.
 
 ---
 

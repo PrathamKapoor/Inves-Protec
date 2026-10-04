@@ -774,3 +774,116 @@ CREATE INDEX IF NOT EXISTS idx_sangyan_dr_role_epoch ON sangyan_region_fencing(r
 
 
 
+---
+
+## 13. Phase 11 Real-Time Streaming, PKCS#11 HSM Cryptographic Signing & Streaming Replication Models
+
+Phase 11 introduces Server-Sent Events (SSE) progress streaming, hardware security module (HSM) post-quantum signing key isolation, and PostgreSQL physical streaming replication tooling.
+
+### 13.1 `InvestigationEvent` & `InvestigationEventType` (`sangyan.realtime.models`)
+Canonical model for real-time investigation progress streaming:
+```python
+class InvestigationEventType(str, Enum):
+    INVESTIGATION_STARTED = "INVESTIGATION_STARTED"
+    INTAKE_STARTED = "INTAKE_STARTED"
+    INTAKE_COMPLETED = "INTAKE_COMPLETED"
+    INTELLIGENCE_STARTED = "INTELLIGENCE_STARTED"
+    INTELLIGENCE_COMPLETED = "INTELLIGENCE_COMPLETED"
+    VERIFICATION_STARTED = "VERIFICATION_STARTED"
+    VERIFICATION_COMPLETED = "VERIFICATION_COMPLETED"
+    CORRELATION_STARTED = "CORRELATION_STARTED"
+    CORRELATION_COMPLETED = "CORRELATION_COMPLETED"
+    SCAM_CHAIN_STARTED = "SCAM_CHAIN_STARTED"
+    SCAM_CHAIN_COMPLETED = "SCAM_CHAIN_COMPLETED"
+    GUIDANCE_STARTED = "GUIDANCE_STARTED"
+    GUIDANCE_COMPLETED = "GUIDANCE_COMPLETED"
+    EXPLANATION_STARTED = "EXPLANATION_STARTED"
+    EXPLANATION_COMPLETED = "EXPLANATION_COMPLETED"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    REVIEW_SUBMITTED = "REVIEW_SUBMITTED"
+    REVIEW_RESUMED = "REVIEW_RESUMED"
+    TRUST_FINALIZATION_STARTED = "TRUST_FINALIZATION_STARTED"
+    TRUST_FINALIZATION_COMPLETED = "TRUST_FINALIZATION_COMPLETED"
+    INVESTIGATION_COMPLETED = "INVESTIGATION_COMPLETED"
+    INVESTIGATION_FAILED = "INVESTIGATION_FAILED"
+    HEARTBEAT = "HEARTBEAT"
+
+@dataclass(frozen=True)
+class InvestigationEvent:
+    event_id: str
+    investigation_id: str
+    organization_id: str
+    event_type: str
+    sequence: int
+    timestamp: float = field(default_factory=time.time)
+    node_name: Optional[str] = None
+    payload: Dict[str, Any] = field(default_factory=dict)
+
+    def to_sse_message(self) -> str:
+        """Format as standard text/event-stream message packet."""
+        data_json = json.dumps(self.to_dict(), separators=(",", ":"))
+        return f"id: {self.event_id}\nevent: {self.event_type}\ndata: {data_json}\n\n"
+```
+
+### 13.2 `SigningProvider` Abstraction & PKCS#11 Invariants (`sangyan.crypto.signing_provider`)
+```python
+class SigningProvider(ABC):
+    @property
+    @abstractmethod
+    def public_key(self) -> bytes: ...
+    @property
+    @abstractmethod
+    def key_identifier(self) -> str: ...
+    @property
+    @abstractmethod
+    def algorithm_id(self) -> str: ...
+    @abstractmethod
+    def sign(self, message: bytes) -> bytes: ...
+    @abstractmethod
+    def verify(self, message: bytes, signature: bytes, public_key: Optional[bytes] = None) -> bool: ...
+    @abstractmethod
+    def rotate_key(self, new_key_id: str) -> None: ...
+    @abstractmethod
+    def is_hardware(self) -> bool: ...
+    @abstractmethod
+    def health(self) -> Dict[str, Any]: ...
+```
+
+**Key Isolation Invariant**:
+Under `PKCS11SimulatorSigningProvider` and `PKCS11SigningProvider`, private signing keys are generated and held on-token. Any attempt to export or inspect private key attributes raises `CryptoError("CKR_ATTRIBUTE_SENSITIVE")`.
+
+### 13.3 Migration 007 Schema Expansion (`sangyan.database.migrations`)
+Migration 007 provisions event replay tables, replication telemetry tables, and key version attribution:
+```sql
+CREATE TABLE IF NOT EXISTS sangyan_investigation_events (
+    id TEXT PRIMARY KEY,
+    investigation_id TEXT NOT NULL,
+    workflow_run_id TEXT,
+    organization_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    timestamp REAL NOT NULL,
+    status TEXT NOT NULL,
+    stage TEXT,
+    progress_pct INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inv_events_inv_seq ON sangyan_investigation_events(investigation_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_inv_events_org_ts ON sangyan_investigation_events(organization_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS sangyan_replication_state (
+    node_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    cluster_epoch INTEGER NOT NULL DEFAULT 1,
+    wal_lsn TEXT,
+    replay_lsn TEXT,
+    lag_bytes INTEGER NOT NULL DEFAULT 0,
+    lag_seconds REAL NOT NULL DEFAULT 0.0,
+    last_heartbeat_at REAL NOT NULL,
+    is_healthy INTEGER NOT NULL DEFAULT 1,
+    metadata TEXT NOT NULL DEFAULT '{}'
+);
+
+ALTER TABLE sangyan_trust_receipts ADD COLUMN signing_key_id TEXT NOT NULL DEFAULT 'default';
+```

@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import base64
-import json
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from sangyan.core.errors import CryptoError
 from sangyan.crypto.hashing import digest_document
-from sangyan.crypto.providers import KeyPair, SignatureProvider, get_signature_provider
+from sangyan.crypto.providers import get_signature_provider
+from sangyan.crypto.signing_provider import SigningProvider, SoftwareSigningProvider
 from sangyan.database.engine import DatabaseEngine
 from sangyan.trust.receipt import TrustReceipt
 
@@ -17,66 +17,50 @@ DEFAULT_ALGORITHM = "ML-DSA-65"
 
 
 class TrustService:
-    """Manages ML-DSA-65 post-quantum signing keypairs, generates receipts, and verifies integrity."""
+    """Manages post-quantum signing keypairs, generates receipts, and verifies integrity."""
 
     def __init__(
         self,
         engine: DatabaseEngine,
         key_dir: Optional[Path | str] = None,
         algorithm_id: str = DEFAULT_ALGORITHM,
+        signing_provider: Optional[SigningProvider] = None,
     ) -> None:
         self._db = engine
         self._algorithm_id = algorithm_id
-        self._provider: SignatureProvider = get_signature_provider(algorithm_id)
-        self._keypair: Optional[KeyPair] = None
-
-        if key_dir is not None:
-            self._key_dir = Path(key_dir)
-            self._key_dir.mkdir(parents=True, exist_ok=True)
-            self._keypair = self._load_or_create_keypair()
-
-    def _load_or_create_keypair(self) -> KeyPair:
-        assert self._key_dir is not None
-        key_file = self._key_dir / "sangyan_trust_key.json"
-        if key_file.exists():
-            data = json.loads(key_file.read_text(encoding="utf-8"))
-            if data.get("algorithm_id") == self._algorithm_id:
-                return KeyPair(
-                    algorithm_id=data["algorithm_id"],
-                    public_key=base64.b64decode(data["public_key"]),
-                    secret_key=base64.b64decode(data["secret_key"]),
-                )
-        # Generate new keypair and persist
-        pair = self._provider.generate_keypair()
-        payload = {
-            "algorithm_id": pair.algorithm_id,
-            "public_key": base64.b64encode(pair.public_key).decode("ascii"),
-            "secret_key": base64.b64encode(pair.secret_key).decode("ascii"),
-            "created_at": time.time(),
-        }
-        key_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return pair
+        if signing_provider is not None:
+            self._signing_provider = signing_provider
+        else:
+            self._signing_provider = SoftwareSigningProvider(
+                key_dir=key_dir,
+                algorithm_id=algorithm_id,
+            )
 
     @property
     def public_key(self) -> bytes:
-        if self._keypair is None:
-            raise CryptoError("trust service has no keypair loaded")
-        return self._keypair.public_key
+        return self._signing_provider.public_key
+
+    @property
+    def key_identifier(self) -> str:
+        return self._signing_provider.key_identifier
+
+    @property
+    def signing_provider(self) -> SigningProvider:
+        return self._signing_provider
 
     def sign_document(self, subject_type: str, subject_id: str, document: Any) -> TrustReceipt:
-        """Compute canonical SHA3-256 digest of document and sign with ML-DSA-65."""
-        if self._keypair is None:
-            raise CryptoError("signing requires a configured key directory")
+        """Compute canonical SHA3-256 digest of document and sign via signing provider."""
         digest = digest_document(document)
-        sig = self._provider.sign(self._keypair.secret_key, digest.encode("utf-8"))
+        sig = self._signing_provider.sign(digest.encode("utf-8"))
         receipt = TrustReceipt(
             subject_type=subject_type,
             subject_id=subject_id,
-            algorithm_id=self._algorithm_id,
-            public_key=self._keypair.public_key,
+            algorithm_id=self._signing_provider.algorithm_id,
+            public_key=self._signing_provider.public_key,
             content_digest=digest,
             signature=sig,
             created_at=time.time(),
+            signing_key_id=self._signing_provider.key_identifier,
         )
         self.save_receipt(receipt)
         return receipt
@@ -86,8 +70,8 @@ class TrustService:
         self._db.execute(
             """
             INSERT INTO sangyan_trust_receipts
-            (id, subject_type, subject_id, algorithm_id, public_key_b64, content_digest, signature_b64, created_at)
-            VALUES (?,?,?,?,?,?,?,?)
+            (id, subject_type, subject_id, algorithm_id, public_key_b64, content_digest, signature_b64, created_at, signing_key_id)
+            VALUES (?,?,?,?,?,?,?,?,?)
             """,
             (
                 receipt.id,
@@ -98,17 +82,32 @@ class TrustService:
                 receipt.content_digest,
                 base64.b64encode(receipt.signature).decode("ascii"),
                 receipt.created_at,
+                receipt.signing_key_id,
             ),
         )
+
+    def get_receipt(self, receipt_id: str) -> Optional[TrustReceipt]:
+        """Retrieve trust receipt from database by ID."""
+        row = self._db.query_one("SELECT * FROM sangyan_trust_receipts WHERE id=?", (receipt_id,))
+        if not row:
+            return None
+        return TrustReceipt.from_dict(row)
 
     def verify_document(self, receipt: TrustReceipt, document: Any) -> bool:
         """Verify receipt against current document content using ML-DSA-65."""
         current_digest = digest_document(document)
         if current_digest != receipt.content_digest:
             return False
-        provider = get_signature_provider(receipt.algorithm_id)
-        return provider.verify(
-            receipt.public_key,
+        return self._signing_provider.verify(
             receipt.content_digest.encode("utf-8"),
             receipt.signature,
+            public_key=receipt.public_key,
         )
+
+    def rotate_key(self, new_key_id: str) -> None:
+        """Rotate active signing key in the underlying provider."""
+        self._signing_provider.rotate_key(new_key_id)
+
+    def health(self) -> Dict[str, Any]:
+        """Query cryptographic provider health status."""
+        return self._signing_provider.health()

@@ -72,6 +72,10 @@ services:
       - SANGYAN_LOG_LEVEL=INFO
       - SANGYAN_RATE_LIMIT_ENABLED=true
       - SANGYAN_AUTO_MIGRATE=false
+      - SANGYAN_SIGNING_PROVIDER=pkcs11_simulator
+      - SANGYAN_SIGNING_KEY_ID=hsm-dist-key
+      - SANGYAN_REALTIME_EVENTS_ENABLED=true
+      - SANGYAN_PG_REPLICATION_PRIMARY_SLOT=sangyan_standby_slot
     volumes:
       - sangyan-keys:/app/keys
       - sangyan-backups:/app/backups
@@ -111,6 +115,10 @@ services:
       - SANGYAN_LOG_LEVEL=INFO
       - SANGYAN_RATE_LIMIT_ENABLED=true
       - SANGYAN_AUTO_MIGRATE=false
+      - SANGYAN_SIGNING_PROVIDER=pkcs11_simulator
+      - SANGYAN_SIGNING_KEY_ID=hsm-dist-key
+      - SANGYAN_REALTIME_EVENTS_ENABLED=true
+      - SANGYAN_PG_REPLICATION_PRIMARY_SLOT=sangyan_standby_slot
     volumes:
       - sangyan-keys:/app/keys
       - sangyan-backups:/app/backups
@@ -143,6 +151,9 @@ services:
       - SANGYAN_TASK_QUEUE_GROUP=sangyan:task_workers
       - SANGYAN_REGION_ID=primary-south-1
       - SANGYAN_DR_ROLE=PRIMARY_ACTIVE
+      - SANGYAN_SIGNING_PROVIDER=pkcs11_simulator
+      - SANGYAN_SIGNING_KEY_ID=hsm-dist-key
+      - SANGYAN_REALTIME_EVENTS_ENABLED=true
       - SANGYAN_DR_FENCING_ENABLED=true
       - SANGYAN_KEY_DIR=/app/keys
       - SANGYAN_LOG_LEVEL=INFO
