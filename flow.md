@@ -835,6 +835,10 @@ Client Submission (POST /workflow/start?async_exec=true)
 | Zero-Data-Loss Controlled Switchover | Multi-stage switchover state machine: lag check, old primary fence, standby promotion, epoch advance | `sangyan/database/replication.py`, `sangyan/dr/manager.py` | 158d789 | D-087 |
 | Database Operational CLI Tooling | sangyan db replication-status, promote, switchover commands with confirmation flags | `sangyan/cli.py` | 158d789 | D-088 |
 | Phase 11 Verification Suite | 23 comprehensive tests covering SSE streaming, HSM signing, replication, and 26-step lifecycle (total 394 tests) | `tests/test_phase11_*.py` | 158d789 | D-081..D-088 |
+| Denmu Editorial Landing Page | Minimal dark charcoal aesthetic, Grainient shader canvas, 4-tier metrics, and demo launchers | `sangyan/web/landing.py`, `sangyan/api/views.py` | fcf06f1 | D-089 |
+| Interactive Investigation Workbench | 10-stage stepper, claims table, interactive SVG evidence graph, 12-stage scam chain, and trust panel | `sangyan/web/workbench.py`, `sangyan/api/views.py` | fcf06f1 | D-090 |
+| Preloaded Walkthrough Fixtures | 3 high-fidelity digital scam cases (Telegram algo, fake SEBI RA, offshore escrow) and SCORES/1930 drafts | `sangyan/web/demo_fixtures.py` | fcf06f1 | D-091 |
+| Web UI Verification Suite | 6 unit and integration tests verifying landing page, workbench, app alias, and demo endpoints (total 400 tests) | `tests/test_web_ui.py` | fcf06f1 | D-089..D-091 |
 
 ---
 
