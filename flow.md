@@ -826,15 +826,15 @@ Client Submission (POST /workflow/start?async_exec=true)
 | Kubernetes Hardening & PDB | PodDisruptionBudget, rolling update strategy, 120s worker drain, and migration lock safety | `deploy/helm/sangyan/`, `sangyan/async_exec/worker.py` | 1868ee5 | D-079 |
 | Controlled DR Failback | Safe multi-stage failback state machine, monotonic epoch progression, and audit continuity | `sangyan/dr/manager.py`, `sangyan/cli.py` | 1868ee5 | D-080 |
 | Phase 10 Verification Suite | 96 new tests covering load, backpressure, backup drill, CLI, failback, full DR, k8s, security, stress | `tests/test_phase10_*.py` | 1868ee5 | D-074..D-080 |
-| Real-Time SSE Event Streaming | Monotonic sequenced event stream over HTTP text/event-stream with replay and backpressure | `sangyan/realtime/broker.py`, `sangyan/realtime/models.py` | current | D-081 |
-| Migration 007 & Schema Evolution | sangyan_investigation_events, sangyan_replication_state, and signing_key_id on trust receipts | `sangyan/database/migrations.py` | current | D-082 |
-| Interactive Visual Stepper | Server-rendered HTML inspection view with real-time 10-stage stepper and EventSource client | `sangyan/api/views.py` | current | D-083 |
-| PKCS#11 HSM Signing Provider | NIST FIPS 204 ML-DSA-65 hardware token signing abstraction, PIN auth, and CKR_ATTRIBUTE_SENSITIVE isolation | `sangyan/crypto/signing_provider.py` | current | D-084 |
-| Fail-Closed Native Dynamic Linking | Native CDLL PKCS#11 loader with strict fail-closed policy and non-extractable key rotation | `sangyan/crypto/signing_provider.py`, `sangyan/config.py` | current | D-085 |
-| PostgreSQL WAL Streaming Replication | PostgresReplicationManager monitoring pg_stat_replication, lag thresholds, and standby health | `sangyan/database/replication.py` | current | D-086 |
-| Zero-Data-Loss Controlled Switchover | Multi-stage switchover state machine: lag check, old primary fence, standby promotion, epoch advance | `sangyan/database/replication.py`, `sangyan/dr/manager.py` | current | D-087 |
-| Database Operational CLI Tooling | sangyan db replication-status, promote, switchover commands with confirmation flags | `sangyan/cli.py` | current | D-088 |
-| Phase 11 Verification Suite | 23 comprehensive tests covering SSE streaming, HSM signing, replication, and 26-step lifecycle (total 394 tests) | `tests/test_phase11_*.py` | current | D-081..D-088 |
+| Real-Time SSE Event Streaming | Monotonic sequenced event stream over HTTP text/event-stream with replay and backpressure | `sangyan/realtime/broker.py`, `sangyan/realtime/models.py` | 158d789 | D-081 |
+| Migration 007 & Schema Evolution | sangyan_investigation_events, sangyan_replication_state, and signing_key_id on trust receipts | `sangyan/database/migrations.py` | 158d789 | D-082 |
+| Interactive Visual Stepper | Server-rendered HTML inspection view with real-time 10-stage stepper and EventSource client | `sangyan/api/views.py` | 158d789 | D-083 |
+| PKCS#11 HSM Signing Provider | NIST FIPS 204 ML-DSA-65 hardware token signing abstraction, PIN auth, and CKR_ATTRIBUTE_SENSITIVE isolation | `sangyan/crypto/signing_provider.py` | 158d789 | D-084 |
+| Fail-Closed Native Dynamic Linking | Native CDLL PKCS#11 loader with strict fail-closed policy and non-extractable key rotation | `sangyan/crypto/signing_provider.py`, `sangyan/config.py` | 158d789 | D-085 |
+| PostgreSQL WAL Streaming Replication | PostgresReplicationManager monitoring pg_stat_replication, lag thresholds, and standby health | `sangyan/database/replication.py` | 158d789 | D-086 |
+| Zero-Data-Loss Controlled Switchover | Multi-stage switchover state machine: lag check, old primary fence, standby promotion, epoch advance | `sangyan/database/replication.py`, `sangyan/dr/manager.py` | 158d789 | D-087 |
+| Database Operational CLI Tooling | sangyan db replication-status, promote, switchover commands with confirmation flags | `sangyan/cli.py` | 158d789 | D-088 |
+| Phase 11 Verification Suite | 23 comprehensive tests covering SSE streaming, HSM signing, replication, and 26-step lifecycle (total 394 tests) | `tests/test_phase11_*.py` | 158d789 | D-081..D-088 |
 
 ---
 
