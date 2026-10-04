@@ -247,16 +247,15 @@ InvestigationOrchestrator.investigate(...)      sangyan/correlation/orchestrator
 | Chained Audit Ledger | Tamper-evident SHA3-256 chained audit trail with cryptographic log integrity and tenant scoping | `sangyan/domain/models.py`, `sangyan/tenancy/repository.py`, `sangyan/verification/engine.py` | a0766f5 | D-027 |
 | Verification REST API & Routes | FastAPI endpoints for claims, content verification, investigations, sources, and audit logs | `sangyan/api/routes.py`, `sangyan/api/app.py` | a0766f5 | D-028 |
 | Human Inspection HTML Views | Server-rendered audit views with side-by-side conflicting evidence and Section 40 banner | `sangyan/api/views.py` | a0766f5 | D-029 |
-| Extended Verification & API Tests | 18 new unit and integration tests bringing suite to 110 passed | `tests/test_verification_extended.py`, `tests/test_api.py` | a0766f5 | D-024..D-029 |
-| Correlation Engine & Graph Correlator | Bounded multi-content entity/claim/signal graph with STRONG/MEDIUM/WEAK hierarchy and cycle avoidance | `sangyan/correlation/correlator.py`, `sangyan/domain/models.py` | pending | D-030 |
-| 12-Stage Scam-Chain Reconstruction | Lifecycle reconstruction with OBSERVED/INFERRED semantics and regulatory hard-negative suppression | `sangyan/correlation/scam_chains.py`, `sangyan/domain/models.py` | pending | D-031 |
-| Controlled Scam Taxonomy | Multi-label 14-pattern scam classifier requiring signal and contradiction combinations | `sangyan/correlation/taxonomy.py`, `sangyan/domain/models.py` | pending | D-032 |
-| Safe Guidance & Incident Preservation | Non-investment conditional action guidance and forensic incident preservation checklist | `sangyan/correlation/guidance.py`, `sangyan/domain/models.py` | pending | D-033 |
-| Grievance Classification & Routing | 9-category problem classification and institutional routing to SCORES, Cybercrime 1930, RBI CMS, Chakshu | `sangyan/correlation/grievance.py`, `sangyan/domain/models.py` | pending | D-034 |
-| Epistemic Explainability & Abstention | "Why was this flagged?" with evidence links and mandatory "What we don't know" explicit uncertainty | `sangyan/correlation/explainer.py`, `sangyan/domain/models.py` | pending | D-035 |
-| Investigation Post-Quantum Trust Binding | NIST ML-DSA-65 digital signing of canonical multi-content investigation dossiers | `sangyan/verification/trust_binding.py`, `sangyan/correlation/orchestrator.py` | pending | D-036 |
-| Phase 4 REST API & Migration 002 | Batch investigation API endpoints and Migration 002 tables (correlations, stages, grievances) | `sangyan/api/`, `sangyan/database/migrations.py` | pending | D-030..D-036 |
-| Phase 4 Test Suite | 21 new tests covering correlation, scam chains, guidance, grievance, explainability, PQC signing, API (total 131 tests) | `tests/test_correlation.py`, `tests/test_api.py` | pending | D-030..D-036 |
+| Correlation Engine & Graph Correlator | Bounded multi-content entity/claim/signal graph with STRONG/MEDIUM/WEAK hierarchy and cycle avoidance | `sangyan/correlation/correlator.py`, `sangyan/domain/models.py` | d6694d6 | D-030 |
+| 12-Stage Scam-Chain Reconstruction | Lifecycle reconstruction with OBSERVED/INFERRED semantics and regulatory hard-negative suppression | `sangyan/correlation/scam_chains.py`, `sangyan/domain/models.py` | d6694d6 | D-031 |
+| Controlled Scam Taxonomy | Multi-label 14-pattern scam classifier requiring signal and contradiction combinations | `sangyan/correlation/taxonomy.py`, `sangyan/domain/models.py` | d6694d6 | D-032 |
+| Safe Guidance & Incident Preservation | Non-investment conditional action guidance and forensic incident preservation checklist | `sangyan/correlation/guidance.py`, `sangyan/domain/models.py` | d6694d6 | D-033 |
+| Grievance Classification & Routing | 9-category problem classification and institutional routing to SCORES, Cybercrime 1930, RBI CMS, Chakshu | `sangyan/correlation/grievance.py`, `sangyan/domain/models.py` | d6694d6 | D-034 |
+| Epistemic Explainability & Abstention | "Why was this flagged?" with evidence links and mandatory "What we don't know" explicit uncertainty | `sangyan/correlation/explainer.py`, `sangyan/domain/models.py` | d6694d6 | D-035 |
+| Investigation Post-Quantum Trust Binding | NIST ML-DSA-65 digital signing of canonical multi-content investigation dossiers | `sangyan/verification/trust_binding.py`, `sangyan/correlation/orchestrator.py` | d6694d6 | D-036 |
+| Phase 4 REST API & Migration 002 | Batch investigation API endpoints and Migration 002 tables (correlations, stages, grievances) | `sangyan/api/`, `sangyan/database/migrations.py` | d6694d6 | D-030..D-036 |
+| Phase 4 Test Suite | 21 new tests covering correlation, scam chains, guidance, grievance, explainability, PQC signing, API (total 131 tests) | `tests/test_correlation.py`, `tests/test_api.py` | d6694d6 | D-030..D-036 |
 
 
 
