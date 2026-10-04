@@ -24,6 +24,7 @@ from sangyan.domain.models import (
     Signal,
     Source,
     WorkflowRun,
+    normalize_content_type,
 )
 from sangyan.security.models import ApiKey
 from sangyan.tenancy.models import SANGYAN_ROLES, has_permission
@@ -121,6 +122,9 @@ class TenantRepository:
         self._assert_write_authority()
         if item.organization_id != self.organization_id:
             raise PermissionDeniedError("content item tenant does not match active organization")
+        # Canonicalize MIME-style / legacy content types before validation so
+        # submissions (e.g. 'text/plain') are never silently dropped.
+        item.content_type = normalize_content_type(item.content_type)
         problems = item.validate()
         if problems:
             raise DomainValidationError(f"invalid content item: {problems}", errors=problems)

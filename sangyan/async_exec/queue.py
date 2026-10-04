@@ -65,6 +65,10 @@ class TaskQueue(ABC):
         """Release underlying connections."""
         ...
 
+    def pending_count(self) -> int:
+        """Number of delivered-but-unacknowledged entries (stream backlog telemetry)."""
+        return 0
+
 
 class RedisStreamTaskQueue(TaskQueue):
     """Production task queue implementation backed by Redis Streams (XADD, XREADGROUP, XACK, XCLAIM)."""
@@ -261,6 +265,16 @@ class RedisStreamTaskQueue(TaskQueue):
             logger.warning("Error during reclaim_expired: %s", exc)
         return results
 
+    def pending_count(self) -> int:
+        """Broker pending-entries count via XPENDING for this consumer group."""
+        try:
+            info = self._redis.xpending(self.stream_name, self.group_name)
+            if isinstance(info, dict):
+                return int(info.get("pending", 0))
+            return int(info[0]) if info else 0
+        except Exception:
+            return 0
+
     def close(self) -> None:
         if self._redis is not None:
             try:
@@ -335,6 +349,10 @@ class InMemoryTaskQueue(TaskQueue):
                     if len(reclaimed) >= batch_size:
                         break
             return reclaimed
+
+    def pending_count(self) -> int:
+        with self._lock:
+            return len(self._pending)
 
     def close(self) -> None:
         with self._lock:

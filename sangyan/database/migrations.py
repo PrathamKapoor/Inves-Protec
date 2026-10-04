@@ -421,12 +421,21 @@ MIGRATION_005_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_sangyan_fencing_epoch ON sangyan_region_fencing(cluster_epoch)",
 )
 
+MIGRATION_006_STATEMENTS: tuple[str, ...] = (
+    # Crash-safe retry scheduling: explicit earliest-retry timestamp so retry
+    # re-enqueue can be driven by a relational sweeper instead of blocking a
+    # worker inline or relying on in-process timers that die with the worker.
+    "ALTER TABLE sangyan_async_tasks ADD COLUMN next_attempt_at REAL",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_tasks_retry_due ON sangyan_async_tasks(status, next_attempt_at)",
+)
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_sangyan_core_tables", MIGRATION_001_STATEMENTS),
     Migration(2, "create_sangyan_correlation_and_guidance_tables", MIGRATION_002_STATEMENTS),
     Migration(3, "create_sangyan_workflow_runs_table", MIGRATION_003_STATEMENTS),
     Migration(4, "create_sangyan_api_keys_table", MIGRATION_004_STATEMENTS),
     Migration(5, "create_sangyan_async_tasks_and_dr_tables", MIGRATION_005_STATEMENTS),
+    Migration(6, "add_task_retry_scheduling_column", MIGRATION_006_STATEMENTS),
 )
 
 

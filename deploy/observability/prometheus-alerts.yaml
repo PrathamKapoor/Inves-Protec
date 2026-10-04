@@ -1,0 +1,142 @@
+# ===========================================================================
+# SANGYAN Phase 10 — Prometheus Alerting Rules
+#
+# Thresholds below are INITIAL OPERATIONAL DEFAULTS chosen from local
+# load-harness observations (see docs/PHASE10_LOAD_REPORT.md). They are NOT
+# production-validated guarantees. Tune per environment; every threshold is a
+# single documented value in this file.
+#
+# Pair with: deploy/observability/grafana-dashboard.json
+# ===========================================================================
+
+groups:
+  - name: sangyan-queue
+    interval: 30s
+    rules:
+      # Sustained queue depth above threshold
+      - alert: SangyanQueueDepthSustained
+        expr: max(sangyan_task_queue_depth{status="QUEUED"}) > 500
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Task queue depth sustained above threshold"
+          description: "QUEUED depth {{ $value }} exceeds threshold 500 for 10m. Workers may be saturated or downstream dependencies degraded. Threshold is an initial default (D-076)."
+
+      # Oldest deliverable task age too high (stuck delivery)
+      - alert: SangyanOldestTaskTooOld
+        expr: sangyan_task_oldest_queued_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Oldest deliverable task age above threshold"
+          description: "Oldest QUEUED/RETRY_WAIT task is {{ $value }}s old (threshold 300s). Delivery may be stalled; check workers, broker, and retry sweepers."
+
+      # Dead-letter rate increasing
+      - alert: SangyanDeadLetterRateIncreasing
+        expr: sum(rate(sangyan_task_dead_letters_total[15m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter rate increasing"
+          description: "Dead-lettering at {{ $value }}/s (threshold 0.05/s). Inspect dead-lettered tasks and upstream dependencies."
+
+      # Worker count unexpectedly zero (no in-flight capacity observed)
+      - alert: SangyanWorkersAbsent
+        expr: sum(up{job=~".*sangyan.*worker.*"}) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No async workers are reporting"
+          description: "Worker target count is zero for 5m. Tasks will accumulate in QUEUED."
+
+      # Lease expiry spike (worker crashes / GC pauses)
+      - alert: SangyanLeaseExpirySpike
+        expr: increase(sangyan_task_lease_expirations_total[15m]) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker lease expirations spiking"
+          description: "{{ $value }} lease expirations in 15m (threshold 10). Workers may be crashing or overloaded."
+
+  - name: sangyan-api
+    interval: 30s
+    rules:
+      # 5xx spike
+      - alert: SangyanApi5xxSpike
+        expr: sum(rate(sangyan_http_requests_total{status_code=~"5.."}[5m])) > 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API 5xx rate above threshold"
+          description: "5xx at {{ $value }}/s (threshold 1/s) for 5m."
+
+      # Authentication abuse spike
+      - alert: SangyanAuthAbuseSpike
+        expr: sum(rate(sangyan_security_events_total{event_type=~"auth_.*",status="rejected"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Authentication failure spike"
+          description: "Auth rejections at {{ $value }}/s (threshold 2/s). Possible credential stuffing."
+
+      # Rate-limit abuse
+      - alert: SangyanRateLimitAbuse
+        expr: sum(rate(sangyan_rate_limit_exceeded_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rate limiting frequently triggered"
+          description: "Rate-limit rejections at {{ $value }}/s (threshold 1/s)."
+
+  - name: sangyan-database
+    interval: 30s
+    rules:
+      # Connection pool exhaustion (available approaches zero)
+      - alert: SangyanDbPoolExhaustion
+        expr: sangyan_db_pool_size > 0 and sangyan_db_pool_available <= 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Only {{ $value }} idle connections available (threshold <= 1). Requests will queue or time out."
+
+  - name: sangyan-disaster-recovery
+    interval: 30s
+    rules:
+      # DR authority conflict: more than one active primary region
+      - alert: SangyanDrAuthorityConflict
+        expr: sangyan_dr_cluster_epoch == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No authoritative cluster epoch observed"
+          description: "Epoch gauge is 0: region registration missing or DR table unreachable."
+
+      # Fencing rejection spike (stale writers active = split-brain pressure)
+      - alert: SangyanFencingRejectionSpike
+        expr: increase(sangyan_dr_fencing_rejections_total[15m]) > 5
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fencing rejections spiking"
+          description: "{{ $value }} stale writes rejected in 15m (threshold 5). A fenced/stale region is actively writing."
+
+      # Backup freshness (requires node_exporter textfile or backup job metrics;
+      # wired when the backup CronJob exports sangyan_backup_age_seconds)
+      - alert: SangyanBackupStale
+        expr: sangyan_backup_age_seconds > 172800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Latest successful backup older than 48h"
+          description: "Backup age {{ $value }}s exceeds threshold 172800s."

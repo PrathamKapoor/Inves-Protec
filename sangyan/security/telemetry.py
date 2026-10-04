@@ -10,6 +10,7 @@ from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
     Counter,
+    Gauge,
     Histogram,
     generate_latest,
 )
@@ -56,16 +57,21 @@ def redact_sensitive_text(text: str) -> str:
 
 
 class RedactingLogFilter(logging.Filter):
-    """Logging filter that scrubs sensitive credentials from log records."""
+    """Logging filter that scrubs sensitive credentials from log records.
+
+    Redaction runs on the fully formatted message so patterns that span the
+    format string and its arguments (e.g. ``"Bearer %s"`` with a token arg)
+    are caught; argument-wise redaction alone misses those because a bare
+    token argument does not match the ``Bearer`` prefix pattern.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str):
-            record.msg = redact_sensitive_text(record.msg)
-        if record.args:
-            if isinstance(record.args, dict):
-                record.args = {k: redact_sensitive_text(str(v)) for k, v in record.args.items()}
-            elif isinstance(record.args, (list, tuple)):
-                record.args = tuple(redact_sensitive_text(str(v)) for v in record.args)
+        try:
+            message = record.getMessage()
+        except Exception:
+            message = str(record.msg)
+        record.msg = redact_sensitive_text(message)
+        record.args = None
         return True
 
 
@@ -150,6 +156,100 @@ class MetricsRegistry:
             "sangyan_pqc_trust_signatures_total",
             "ML-DSA-65 post-quantum trust signature operations counter",
             ["status"],
+            registry=self.registry,
+        )
+
+        # ------------------------------------------------------------------
+        # Phase 10: Queue / Worker / DR / Database operational metrics
+        # ------------------------------------------------------------------
+
+        self.tasks_total = Counter(
+            "sangyan_tasks_total",
+            "Async task lifecycle transitions by task type and resulting status",
+            ["task_type", "status"],
+            registry=self.registry,
+        )
+
+        self.task_retries_total = Counter(
+            "sangyan_task_retries_total",
+            "Async task retry scheduling counter by task type",
+            ["task_type"],
+            registry=self.registry,
+        )
+
+        self.task_dead_letters_total = Counter(
+            "sangyan_task_dead_letters_total",
+            "Async tasks quarantined to dead-letter by task type",
+            ["task_type"],
+            registry=self.registry,
+        )
+
+        self.task_lease_expirations_total = Counter(
+            "sangyan_task_lease_expirations_total",
+            "Worker lease expirations recovered by lease reclamation",
+            registry=self.registry,
+        )
+
+        self.task_execution_seconds = Histogram(
+            "sangyan_task_execution_seconds",
+            "Async task execution duration from lease acquisition to terminal transition",
+            buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+            registry=self.registry,
+        )
+
+        self.task_queue_depth = Gauge(
+            "sangyan_task_queue_depth",
+            "Relational task ledger depth by lifecycle status (queue saturation telemetry)",
+            ["status"],
+            registry=self.registry,
+        )
+
+        self.task_oldest_queued_seconds = Gauge(
+            "sangyan_task_oldest_queued_seconds",
+            "Age of the oldest deliverable task (QUEUED or RETRY_WAIT) in seconds",
+            registry=self.registry,
+        )
+
+        self.task_stream_pending = Gauge(
+            "sangyan_task_stream_pending",
+            "Broker pending-entries count for the task stream consumer group",
+            registry=self.registry,
+        )
+
+        self.worker_inflight_tasks = Gauge(
+            "sangyan_worker_inflight_tasks",
+            "Tasks currently executing in this worker process (bounded utilization gauge)",
+            registry=self.registry,
+        )
+
+        self.dr_promotions_total = Counter(
+            "sangyan_dr_promotions_total",
+            "Disaster recovery region promotion attempts by outcome",
+            ["status"],
+            registry=self.registry,
+        )
+
+        self.dr_fencing_rejections_total = Counter(
+            "sangyan_dr_fencing_rejections_total",
+            "Writes rejected by epoch/fencing authority checks (split-brain defense telemetry)",
+            registry=self.registry,
+        )
+
+        self.dr_cluster_epoch = Gauge(
+            "sangyan_dr_cluster_epoch",
+            "Current authoritative cluster epoch observed by this region",
+            registry=self.registry,
+        )
+
+        self.db_pool_size = Gauge(
+            "sangyan_db_pool_size",
+            "Database connection pool configured maximum size",
+            registry=self.registry,
+        )
+
+        self.db_pool_available = Gauge(
+            "sangyan_db_pool_available",
+            "Database connection pool currently idle connections (pool exhaustion telemetry)",
             registry=self.registry,
         )
 

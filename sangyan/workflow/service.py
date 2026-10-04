@@ -242,8 +242,26 @@ class WorkflowService:
         # Update WorkflowRun status
         repo.update_workflow_run(wf_run.id, status="RUNNING", current_node="review_gate_node")
 
-        # Resume execution in LangGraph
-        res = self.workflow.invoke(Command(resume=review_decision), thread_id=wf_run.thread_id)
+        # Resume execution in LangGraph; on failure, revert the investigation to
+        # AWAITING_REVIEW so transient errors (worker crash, registry outage,
+        # stale region) remain recoverable instead of wedging it in FINALIZING.
+        try:
+            res = self.workflow.invoke(Command(resume=review_decision), thread_id=wf_run.thread_id)
+        except Exception as exc:
+            repo.transition_investigation_status(
+                investigation_id,
+                from_status="FINALIZING",
+                to_status="AWAITING_REVIEW",
+                summary=f"Resume failed; reverted to AWAITING_REVIEW: {exc}",
+            )
+            repo.update_workflow_run(wf_run.id, status="AWAITING_REVIEW", current_node="review_gate_node")
+            repo.record_audit_event(
+                action="workflow_resume_failed",
+                resource=f"investigation:{investigation_id}",
+                result="REVERTED_TO_AWAITING_REVIEW",
+                metadata={"error": str(exc), "run_id": wf_run.run_id},
+            )
+            raise
 
         if res.get("status") == "COMPLETED":
             repo.update_workflow_run(wf_run.id, status="COMPLETED", current_node="completion_node")

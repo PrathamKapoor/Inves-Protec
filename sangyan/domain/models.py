@@ -17,6 +17,34 @@ from sangyan.domain.base import CURRENT_SCHEMA_VERSION, new_id, require, validat
 # ---------------------------------------------------------------------------
 
 CONTENT_TYPES = ("text", "url", "document", "image")
+
+
+def normalize_content_type(raw: Any) -> str:
+    """Map MIME-style or legacy content-type spellings onto domain categories.
+
+    The API accepts MIME-style types (``text/plain``) and historical callers use
+    ``TEXT``; persisted domain records require one of :data:`CONTENT_TYPES`.
+    Normalizing at construction/persistence prevents silent validation drops.
+    """
+    if not raw:
+        return "text"
+    value = str(raw).strip().lower()
+    if value in CONTENT_TYPES:
+        return value
+    if value.startswith("text/"):
+        base = value[5:]
+        return base if base in CONTENT_TYPES else "text"
+    if value.startswith("image/"):
+        return "image"
+    if value.startswith("application/"):
+        return "url" if "url" in value or "uri" in value else "document"
+    if "url" in value or "uri" in value or "link" in value:
+        return "url"
+    if "doc" in value or "pdf" in value:
+        return "document"
+    if "image" in value or "png" in value or "jpeg" in value:
+        return "image"
+    return "text"
 PROCESSING_STATUSES = ("pending", "processing", "completed", "failed")
 
 CLAIM_TYPES = ("factual", "regulatory", "return", "urgency", "payment", "affiliation", "other")

@@ -56,8 +56,8 @@ def test_health_check(app_and_repo):
 
 
 def test_list_sources(app_and_repo):
-    client, _, _, _ = app_and_repo
-    res = client.get("/api/v1/sources")
+    client, _, org_id, user_id = app_and_repo
+    res = client.get(f"/api/v1/sources?organization_id={org_id}&user_id={user_id}")
     assert res.status_code == 200
     sources = res.json()
     assert len(sources) >= 7

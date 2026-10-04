@@ -82,6 +82,8 @@ RATE_LIMIT_POLICIES: dict[str, tuple[int, int]] = {
     "auth": (10, 10),              # 10 req/min for auth endpoints
     "investigation": (30, 30),     # 30 req/min for compute-heavy verification
     "workflow_mutate": (20, 20),   # 20 req/min for graph mutation (start, resume, cancel)
+    "task": (30, 30),              # 30 req/min for async task mutation (retry, resubmission)
+    "dr": (5, 5),                  # 5 req/min for DR operations (promotion/simulation are rare + dangerous)
     "read": (120, 120),            # 120 req/min for reads and inspections
     "default": (60, 60),           # 60 req/min default
 }

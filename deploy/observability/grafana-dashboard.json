@@ -1,0 +1,159 @@
+{
+  "title": "SANGYAN Operational Overview",
+  "uid": "sangyan-operational-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "tags": ["sangyan", "operations"],
+  "description": "Phase 10 operational dashboards for API, queue, workers, database, Redis, and disaster recovery. Thresholds shown are initial operational defaults (D-076), not production-validated guarantees.",
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "API request rate by status class",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sum by (status_code) (rate(sangyan_http_requests_total[5m]))", "legendFormat": "{{status_code}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "API latency percentiles",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(sangyan_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(sangyan_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(sangyan_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "API 5xx rate",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sum(rate(sangyan_http_requests_total{status_code=~\"5..\"}[5m]))", "legendFormat": "5xx/s" },
+        { "expr": "sum(rate(sangyan_http_requests_total{status_code=~\"4..\"}[5m]))", "legendFormat": "4xx/s" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Queue depth by task status (saturation)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sangyan_task_queue_depth", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Enqueue / completion / retry / dead-letter rates",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sum(rate(sangyan_tasks_total{status=\"QUEUED\"}[5m]))", "legendFormat": "enqueue/s" },
+        { "expr": "sum(rate(sangyan_tasks_total{status=\"SUCCEEDED\"}[5m]))", "legendFormat": "success/s" },
+        { "expr": "sum(rate(sangyan_task_retries_total[5m]))", "legendFormat": "retry/s" },
+        { "expr": "sum(rate(sangyan_task_dead_letters_total[5m]))", "legendFormat": "dead-letter/s" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Task execution latency percentiles",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(sangyan_task_execution_seconds_bucket[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(sangyan_task_execution_seconds_bucket[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(sangyan_task_execution_seconds_bucket[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Worker utilization (in-flight tasks)",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sangyan_worker_inflight_tasks", "legendFormat": "in-flight" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Lease expirations (worker crash/recovery signal)",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "rate(sangyan_task_lease_expirations_total[5m])", "legendFormat": "expirations/s" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Database pool: size vs available (pool exhaustion telemetry)",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sangyan_db_pool_size", "legendFormat": "pool size" },
+        { "expr": "sangyan_db_pool_available", "legendFormat": "available" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Security events (auth failures, tenant mismatches, rate limits)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sum by (event_type) (rate(sangyan_security_events_total[5m]))", "legendFormat": "{{event_type}}" },
+        { "expr": "sum(rate(sangyan_rate_limit_exceeded_total[5m]))", "legendFormat": "rate-limit/s" }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "DR: active epoch, promotions, fencing rejections",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sangyan_dr_cluster_epoch", "legendFormat": "cluster epoch" },
+        { "expr": "sum(rate(sangyan_dr_promotions_total[5m]))", "legendFormat": "promotions/s" },
+        { "expr": "sum(rate(sangyan_dr_fencing_rejections_total[5m]))", "legendFormat": "fencing rejections/s" }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Post-quantum trust signature operations",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sum by (status) (rate(sangyan_pqc_trust_signatures_total[5m]))", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Workflow run transitions",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "datasource": "${DS_PROMETHEUS}",
+      "targets": [
+        { "expr": "sum by (status) (rate(sangyan_workflow_runs_total[5m]))", "legendFormat": "{{status}}" }
+      ]
+    }
+  ],
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "links": []
+}

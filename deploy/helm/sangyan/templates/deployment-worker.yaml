@@ -20,6 +20,21 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
+      # Graceful drain window: SIGTERM -> stop claiming -> finish in-flight tasks
+      # (bounded by the worker drain timeout) -> release leases cleanly.
+      terminationGracePeriodSeconds: 90
+      # Spread worker pods across nodes (preferred, never blocking): reduces
+      # correlated lease contention and node-drain blast radius.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "sangyan.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: worker
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -33,7 +48,7 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["python", "-m", "sangyan.cli", "worker", "--poll-ms", "1000", "--lease-sec", "60"]
+          command: ["python", "-m", "sangyan.cli", "worker", "--poll-ms", "1000", "--lease-sec", "60", "--concurrency", "4"]
           envFrom:
             - configMapRef:
                 name: {{ include "sangyan.fullname" . }}-config
@@ -42,6 +57,10 @@ spec:
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           volumeMounts:
+            # Relational task ledger / investigation store (SQLite single-node topology;
+            # unused when SANGYAN_DATABASE_URL points at PostgreSQL)
+            - name: data
+              mountPath: /app/data
             - name: checkpoints
               mountPath: /app/checkpoints
             - name: keys
@@ -49,6 +68,9 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "sangyan.fullname" . }}-data
         - name: checkpoints
           persistentVolumeClaim:
             claimName: {{ include "sangyan.fullname" . }}-checkpoints

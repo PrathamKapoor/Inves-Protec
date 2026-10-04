@@ -418,12 +418,16 @@ def worker_cmd(worker_id: Optional[str], concurrency: Optional[int], lease_sec: 
         queue = InMemoryTaskQueue()
 
     lease_duration = lease_sec or config.task_lease_duration_sec
+    effective_concurrency = concurrency if concurrency is not None else config.worker_concurrency
     worker = AsyncInvestigationWorker(
         queue=queue,
         repository=task_repo,
         workflow_service=wf_service,
         worker_id=worker_id,
         lease_duration_sec=lease_duration,
+        concurrency=effective_concurrency,
+        maintenance_interval_sec=config.task_retry_sweep_interval_sec,
+        stale_queue_requeue_sec=config.task_stale_queue_requeue_sec,
     )
 
     click.echo(click.style(f"Worker {worker.worker_id} started (lease={lease_duration}s, region={config.region_id})...", fg="green"))
@@ -467,8 +471,25 @@ def dr_status():
 @dr_group.command("promote")
 @click.argument("region_id")
 @click.option("--reason", default="", help="Promotion justification")
-def dr_promote(region_id: str, reason: str):
-    """Promote a standby region to active primary with epoch progression and fencing."""
+@click.option("--yes", is_flag=True, default=False, help="Skip interactive confirmation (for automation)")
+def dr_promote(region_id: str, reason: str, yes: bool):
+    """Promote a standby region to active primary with epoch progression and fencing.
+
+    Requires explicit operator intent: prompts for confirmation unless --yes is given.
+    """
+    if not yes:
+        click.echo(
+            click.style(
+                f"About to promote region '{region_id}' to PRIMARY_ACTIVE. "
+                "This increments the cluster epoch and fences the current primary.",
+                fg="yellow",
+                bold=True,
+            )
+        )
+        if not click.confirm("Proceed with promotion?", default=False):
+            click.echo(click.style("Promotion cancelled; no changes made.", fg="cyan"))
+            sys.exit(0)
+
     config = load_config()
     engine = create_engine(config.database_url)
     if config.auto_migrate:
@@ -487,8 +508,25 @@ def dr_promote(region_id: str, reason: str):
 @click.argument("from_region")
 @click.argument("to_region")
 @click.option("--reason", default="Simulated failover via CLI", help="Simulation reason")
-def dr_simulate(from_region: str, to_region: str, reason: str):
-    """Simulate a controlled DR failover and verify cryptographic audit ledger continuity."""
+@click.option("--yes", is_flag=True, default=False, help="Skip interactive confirmation (for automation)")
+def dr_simulate(from_region: str, to_region: str, reason: str, yes: bool):
+    """Simulate a controlled DR failover and verify cryptographic audit ledger continuity.
+
+    This performs real role/epoch transitions; explicit operator intent is required.
+    """
+    if not yes:
+        click.echo(
+            click.style(
+                f"About to simulate failover: '{from_region}' -> '{to_region}'. "
+                "This demotes the current primary and promotes the target.",
+                fg="yellow",
+                bold=True,
+            )
+        )
+        if not click.confirm("Proceed with simulated failover?", default=False):
+            click.echo(click.style("Simulation cancelled; no changes made.", fg="cyan"))
+            sys.exit(0)
+
     config = load_config()
     engine = create_engine(config.database_url)
     if config.auto_migrate:
@@ -620,6 +658,55 @@ def task_retry(task_id: str):
         sys.exit(1)
     finally:
         queue.close()
+
+
+@task_group.command("prune")
+@click.option("--older-than-days", default=30.0, type=float, help="Retention window for terminal task rows (default 30 days)")
+@click.option("--status", default=None, help="Restrict to one retention-prunable status (SUCCEEDED or CANCELLED)")
+@click.option("--org", default=None, help="Restrict to a single organization ID")
+@click.option("--limit", default=1000, type=int, help="Maximum rows to delete in this invocation")
+@click.option("--yes", is_flag=True, default=False, help="Skip interactive confirmation")
+def task_prune(older_than_days: float, status: Optional[str], org: Optional[str], limit: int, yes: bool):
+    """Apply the operational-telemetry retention window to terminal task rows.
+
+    Only SUCCEEDED/CANCELLED task ledger rows are ever removed. DEAD_LETTERED
+    tasks (quarantine evidence), in-flight tasks, audit events, investigations,
+    evidence, and trust receipts are never touched by this command.
+    """
+    if not yes:
+        click.echo(
+            click.style(
+                f"About to DELETE terminal task rows older than {older_than_days} days"
+                + (f" with status {status}" if status else " (SUCCEEDED/CANCELLED)")
+                + (f" for org {org}" if org else " for all orgs")
+                + ".",
+                fg="yellow",
+                bold=True,
+            )
+        )
+        if not click.confirm("Proceed with retention prune?", default=False):
+            click.echo(click.style("Prune cancelled; no rows removed.", fg="cyan"))
+            sys.exit(0)
+
+    config = load_config()
+    engine = create_engine(config.database_url)
+    if config.auto_migrate:
+        MigrationRunner(engine).migrate()
+    from sangyan.async_exec.repository import AsyncTaskRepository
+    from sangyan.core.errors import DomainValidationError
+
+    repo = AsyncTaskRepository(engine)
+    try:
+        deleted = repo.prune_tasks(
+            older_than_days=older_than_days,
+            status=status,
+            organization_id=org,
+            limit=limit,
+        )
+    except DomainValidationError as e:
+        click.echo(click.style(f"Prune refused: {e}", fg="red"), err=True)
+        sys.exit(1)
+    click.echo(click.style(f"Retention prune complete: {deleted} task row(s) removed.", fg="green"))
 
 
 if __name__ == "__main__":

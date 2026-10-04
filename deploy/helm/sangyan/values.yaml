@@ -136,6 +136,12 @@ config:
   taskQueueGroup: "sangyan:task_workers"
   taskDeadLetterStream: "sangyan:tasks:dead_letter"
   taskLeaseDurationSec: 60
+  # Phase 10: saturation controls & crash-safe retry scheduling (initial defaults)
+  taskMaxOutstandingPerTenant: 1000
+  maxContentsPerWorkflowRequest: 100
+  taskRetrySweepIntervalSec: 1.0
+  taskStaleQueueRequeueSec: 30.0
+  workerConcurrency: 4
   regionId: "primary-south-1"
   drRole: "PRIMARY_ACTIVE"
   drClusterEpoch: 1

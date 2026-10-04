@@ -1,8 +1,9 @@
 """HTTP Security Headers, Request Size Bounding, Correlation IDs, and Rate Limiting Middlewares."""
 from __future__ import annotations
 
+import json
 import uuid
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -12,6 +13,26 @@ from sangyan.security.models import SecurityConfig
 from sangyan.security.rate_limiter import TokenBucketRateLimiter
 
 MAX_REQUEST_BODY_BYTES = 2 * 1024 * 1024  # 2 MB
+MAX_JSON_DEPTH = 64  # nested payload abuse bound (rejects before framework validation)
+
+
+def json_depth_exceeds(value: Any, limit: int) -> bool:
+    """Iteratively compute JSON nesting depth; True when deeper than limit.
+
+    Uses an explicit stack to avoid recursion on hostile payloads.
+    """
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > limit:
+            return True
+        if isinstance(current, dict):
+            for child in current.values():
+                stack.append((child, depth + 1))
+        elif isinstance(current, list):
+            for child in current:
+                stack.append((child, depth + 1))
+    return False
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -36,11 +57,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 class RequestSizeLimiterMiddleware(BaseHTTPMiddleware):
-    """Rejects incoming request bodies exceeding the maximum bound (2 MB) before parsing."""
+    """Rejects oversized request bodies (2 MB) and pathologically nested JSON payloads
+    before they reach framework validation (which would otherwise raise unhandled
+    depth errors -> HTTP 500)."""
 
-    def __init__(self, app, max_body_bytes: int = MAX_REQUEST_BODY_BYTES) -> None:
+    def __init__(
+        self,
+        app,
+        max_body_bytes: int = MAX_REQUEST_BODY_BYTES,
+        max_json_depth: int = MAX_JSON_DEPTH,
+    ) -> None:
         super().__init__(app)
         self.max_body_bytes = max_body_bytes
+        self.max_json_depth = max_json_depth
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         content_length_str = request.headers.get("content-length")
@@ -56,6 +85,25 @@ class RequestSizeLimiterMiddleware(BaseHTTPMiddleware):
                     )
             except ValueError:
                 pass
+
+        # Bounded JSON nesting depth guard (nested payload abuse protection)
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type and request.method in ("POST", "PUT", "PATCH"):
+            body = await request.body()
+            if body:
+                try:
+                    parsed = json.loads(body)
+                except Exception:
+                    parsed = None  # malformed JSON -> framework validation returns 422
+                if parsed is not None and json_depth_exceeds(parsed, self.max_json_depth):
+                    return JSONResponse(
+                        status_code=422,
+                        content={
+                            "detail": (
+                                f"JSON payload nesting exceeds maximum depth of {self.max_json_depth}."
+                            )
+                        },
+                    )
 
         return await call_next(request)
 
@@ -87,8 +135,12 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
     def _classify_endpoint(self, path: str, method: str) -> str:
         if "/auth/" in path:
             return "auth"
+        if "/dr/" in path and method in ("POST", "PUT", "DELETE"):
+            return "dr"
         if "/workflow/" in path and method in ("POST", "PUT", "DELETE"):
             return "workflow_mutate"
+        if "/tasks/" in path and method in ("POST", "PUT", "DELETE"):
+            return "task"
         if "/verify/" in path or path.endswith("/investigate"):
             return "investigation"
         if method == "GET":

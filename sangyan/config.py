@@ -89,6 +89,17 @@ class SangyanConfig:
     task_dead_letter_stream: str = "sangyan:tasks:dead_letter"
     worker_concurrency: int = 4
 
+    # Queue Saturation, Flood Protection & Retry Scheduling (Phase 10)
+    # Per-tenant admission control: maximum non-terminal tasks per organization.
+    # 0 disables the cap (not recommended for multi-tenant production).
+    task_max_outstanding_per_tenant: int = 1000
+    # Maximum content items accepted per workflow start request (pipeline cost bound).
+    max_contents_per_workflow_request: int = 100
+    # Interval for the worker relational sweeper (retry re-drive + outbox re-drive).
+    task_retry_sweep_interval_sec: float = 1.0
+    # Age threshold before a QUEUED task absent from the broker is re-driven from the ledger.
+    task_stale_queue_requeue_sec: float = 30.0
+
     # Multi-Region Disaster Recovery & Split-Brain Fencing (Phase 9)
     region_id: str = "primary-south-1"
     dr_cluster_epoch: int = 1
@@ -151,6 +162,11 @@ class SangyanConfig:
             "backup_encryption_configured": bool(self.backup_encryption_key),
             "backup_retention_count": self.backup_retention_count,
             "task_queue_type": self.task_queue_type,
+            "worker_concurrency": self.worker_concurrency,
+            "task_max_outstanding_per_tenant": self.task_max_outstanding_per_tenant,
+            "max_contents_per_workflow_request": self.max_contents_per_workflow_request,
+            "task_retry_sweep_interval_sec": self.task_retry_sweep_interval_sec,
+            "task_stale_queue_requeue_sec": self.task_stale_queue_requeue_sec,
             "region_id": self.region_id,
             "dr_role": self.dr_role,
             "dr_cluster_epoch": self.dr_cluster_epoch,
@@ -244,6 +260,31 @@ def load_config(env_source: Optional[Mapping[str, str]] = None) -> SangyanConfig
     except ValueError:
         worker_concurrency = 4
 
+    # Phase 10 flood-control & retry-scheduling configs
+    raw_outstanding = env.get("SANGYAN_TASK_MAX_OUTSTANDING_PER_TENANT", "1000")
+    try:
+        task_max_outstanding = int(raw_outstanding)
+    except ValueError:
+        task_max_outstanding = 1000
+
+    raw_max_contents = env.get("SANGYAN_MAX_CONTENTS_PER_WORKFLOW_REQUEST", "100")
+    try:
+        max_contents_per_request = int(raw_max_contents)
+    except ValueError:
+        max_contents_per_request = 100
+
+    raw_sweep = env.get("SANGYAN_TASK_RETRY_SWEEP_INTERVAL_SEC", "1.0")
+    try:
+        retry_sweep_interval = float(raw_sweep)
+    except ValueError:
+        retry_sweep_interval = 1.0
+
+    raw_stale_queue = env.get("SANGYAN_TASK_STALE_QUEUE_REQUEUE_SEC", "30.0")
+    try:
+        stale_queue_requeue = float(raw_stale_queue)
+    except ValueError:
+        stale_queue_requeue = 30.0
+
     region_id = env.get("SANGYAN_REGION_ID", "primary-south-1")
     raw_epoch = env.get("SANGYAN_DR_CLUSTER_EPOCH", "1")
     try:
@@ -293,6 +334,10 @@ def load_config(env_source: Optional[Mapping[str, str]] = None) -> SangyanConfig
         task_max_retries=task_max_retries,
         task_dead_letter_stream=task_dl_stream,
         worker_concurrency=worker_concurrency,
+        task_max_outstanding_per_tenant=task_max_outstanding,
+        max_contents_per_workflow_request=max_contents_per_request,
+        task_retry_sweep_interval_sec=retry_sweep_interval,
+        task_stale_queue_requeue_sec=stale_queue_requeue,
         region_id=region_id,
         dr_cluster_epoch=dr_cluster_epoch,
         dr_role=dr_role,
@@ -363,6 +408,17 @@ def validate_production_config(config: SangyanConfig) -> None:
     # 7. Checkpoint durability
     if config.checkpoint_db_path and config.checkpoint_db_path.strip() == ":memory:":
         errors.append("Production forbids in-memory LangGraph checkpoint database ':memory:'.")
+
+    # 8. Queue saturation flood protection must not be disabled in production
+    if config.task_max_outstanding_per_tenant <= 0:
+        errors.append(
+            "Production requires SANGYAN_TASK_MAX_OUTSTANDING_PER_TENANT > 0; "
+            "unbounded per-tenant task admission is forbidden in multi-tenant production."
+        )
+    if config.task_lease_duration_sec <= 0:
+        errors.append("SANGYAN_TASK_LEASE_DURATION_SEC must be positive.")
+    if config.max_contents_per_workflow_request <= 0:
+        errors.append("SANGYAN_MAX_CONTENTS_PER_WORKFLOW_REQUEST must be positive.")
 
     if errors:
         msg = "Production Configuration Validation Failed:\n" + "\n".join(f"  - {e}" for e in errors)

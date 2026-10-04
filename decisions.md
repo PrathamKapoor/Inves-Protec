@@ -1232,12 +1232,107 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Verifiable, encrypted offsite recovery with explicit RPO/RTO metrics.
 - Files: `sangyan/database/cloud_backup.py`, `sangyan/dr/manager.py`, `sangyan/cli.py`, `tests/test_cloud_backup.py`
 
+---
 
+### D-074: Deterministic Multi-Tenant Load Testing & Concurrency Validation Harness
+- Date / phase / commit: 2026-10-04, Phase 10
+- Context: Operational production readiness requires proving system stability, p50/p95/p99 latency bounds, and strict tenant isolation under realistic concurrent client and worker pressure without relying on uncontrollable external load-generation services.
+- Decision: Implemented a deterministic in-process and CLI load harness (\sangyan/observability/load_harness.py\):
+  1. Configurable Multi-Tenant Scenarios: Supports customizable concurrent clients, requests per second, duration, tenant counts, task mix (workflow start, review resume, status poll), and worker counts.
+  2. Granular High-Resolution Metrics: Measures API request latency, queue residency latency, task execution duration, database/Redis operation latencies, and percentiles (p50, p95, p99), error rates, retry counts, and dead-letter rates.
+  3. Tenant Isolation Invariant: Validates strict absence of cross-tenant reads, task executions, checkpoints, dead letters, or audit event pollution during high concurrency.
+  4. Reproducible Baseline: Establishes reproducible baseline benchmarks without external SaaS dependencies.
+- Why: Provides reproducible, verifiable performance baselines and regression detection for distributed operations.
+- Alternatives considered: External Locust/k6 cluster (rejected: introduces non-deterministic network overhead, external dependencies, and complicates air-gapped CI).
+- Consequences: Deterministic concurrency and load verification runnable via CLI (\sangyan load-test\) and pytest.
+- Files: \sangyan/observability/load_harness.py\, \sangyan/cli.py\, \	ests/test_phase10_load_harness.py
+---
 
+### D-075: Multi-Subsystem Operational Observability & High-Resolution Telemetry Exporters
+- Date / phase / commit: 2026-10-04, Phase 10
+- Context: Phase 8 and 9 introduced OpenTelemetry tracing and initial Prometheus metrics. Operational operators require granular, low-cardinality telemetry across API, Queue, Worker, Database, Redis, and DR subsystems to detect degradation before outages.
+- Decision: Built an integrated Prometheus metrics suite and machine-readable Grafana dashboard (\sangyan/security/telemetry.py\, \deploy/observability/\):
+  1. Queue & Worker Telemetry: Added \sangyan_task_queue_depth\ (by status), \sangyan_task_oldest_age_seconds\, \sangyan_task_leases_active\, \sangyan_task_lease_expirations_total\, \sangyan_task_retries_total\, \sangyan_worker_inflight_tasks\.
+  2. Database & Redis Telemetry: Added \sangyan_db_pool_active_connections\, \sangyan_db_pool_idle_connections\, \sangyan_redis_connected\, \sangyan_redis_stream_backlog\.
+  3. Disaster Recovery Telemetry: Added \sangyan_dr_current_epoch\, \sangyan_dr_is_active\, \sangyan_dr_fencing_violations_total\, \sangyan_backup_freshness_seconds\.
+  4. Privacy Boundary Guardrail: Spans and metrics strictly scrub investment claims, PII, passwords, and tokens.
+  5. Machine-Readable Dashboard: Packaged \deploy/observability/grafana-dashboard.json\ for zero-configuration monitoring.
+- Why: Provides complete operational visibility into system saturation, worker health, and DR authority.
+- Alternatives considered: Third-party proprietary APM agents (rejected: violates offline/air-gapped and security compliance requirements).
+- Consequences: Production monitoring with zero PII leakage and standard Prometheus exposition.
+- Files: \sangyan/security/telemetry.py\, \deploy/observability/grafana-dashboard.json\, \	ests/test_phase10_observability.py
+---
 
+### D-076: Production Alerting Rules & Early-Warning Queue Saturation Thresholds
+- Date / phase / commit: 2026-10-04, Phase 10
+- Context: Operators require explicit, configurable alerting rules to detect queue congestion, dead-letter spikes, worker crashes, database pool saturation, Redis partitions, and DR authority conflicts.
+- Decision: Formulated standard Prometheus alerting rules (\deploy/observability/prometheus-alerts.yaml\):
+  1. Queue Alerts: \TaskQueueCongestionWarning\ (depth > 100 for 5m), \TaskQueueOldestTaskCritical\ (oldest task age > 300s for 2m), \DeadLetterSpike\ (rate > 0.05/s).
+  2. Worker Alerts: \WorkerFleetStarvation\ (active workers == 0 with pending tasks), \WorkerLeaseExpirySpike\ (lease expirations > 5 in 5m).
+  3. Infrastructure Alerts: \DatabasePoolExhaustionWarning\ (pool utilization > 85%), \RedisUnavailableCritical\ (Redis ping failures > 1m).
+  4. Disaster Recovery Alerts: \DRSplitBrainDetected\ (multiple active regions or fencing violations > 0), \CloudBackupStale\ (backup freshness > 86400s).
+  5. API Alerts: \APIHighErrorRate\ (5xx rate > 2% for 5m), \AuthenticationAbuseSpike\ (401/403 rate > 10/s).
+- Why: Ensures rapid, proactive detection of operational anomalies with actionable runbook annotations.
+- Alternatives considered: Hardcoded log scanning (rejected: slow, fragile, and high false-positive rate).
+- Consequences: Production alerting templates compatible with Prometheus Alertmanager.
+- Files: \deploy/observability/prometheus-alerts.yaml
+---
 
+### D-077: Admission Control, Payload Bounds & Task Flood Backpressure Protection
+- Date / phase / commit: 2026-10-04, Phase 10
+- Context: When submission rates exceed worker processing capacity, unbounded queueing risks memory exhaustion, database connection starvation, and cascading failures. The platform requires multi-layered admission control and honest backpressure semantics.
+- Decision: Implemented multi-tier task flood protection and backpressure controls (\sangyan/security/middleware.py\, \sangyan/api/routes.py\, \sangyan/async_exec/repository.py\):
+  1. Request Payload Bounds: Enforces 2 MB hard body limit, max 50 contents per submission (\max_investigation_contents = 50\), and rejection of malformed or nested JSON bomb payloads.
+  2. Per-Tenant Concurrency Limits: Enforces \max_outstanding_tasks_per_tenant\ (default 500) and \max_outstanding_tasks_cluster\ (default 5000); returns honest \HTTP 429 Too Many Requests\ or \HTTP 503 Service Unavailable\ with \Retry-After\ headers when limits are reached.
+  3. Database Queue Protection: Pre-insert checks prevent relational outbox bloat during worker outages.
+  4. Task Submission Idempotency: Duplicate submissions with matching idempotency keys return existing task references (\HTTP 200/202\) without re-queueing duplicate workload.
+- Why: Prevents asynchronous infrastructure exhaustion while preserving predictable, honest API error semantics.
+- Alternatives considered: Dropping tasks silently (rejected: catastrophic violation of user trust and audit continuity).
+- Consequences: Rock-solid defense against task flooding, denial of service, and queue saturation.
+- Files: \sangyan/api/routes.py\, \sangyan/config.py\, \sangyan/async_exec/repository.py\, \	ests/test_phase10_backpressure.py
+---
 
+### D-078: Non-Destructive Operational Retention & Task Ledger Pruning Architecture
+- Date / phase / commit: 2026-10-04, Phase 10
+- Context: Over time, completed asynchronous tasks accumulate in \sangyan_async_tasks\. Indefinite accumulation causes query degradation, but naive deletion risks deleting forensic evidence, dead-letter records, or breaking cryptographic audit chains.
+- Decision: Implemented strict, non-destructive retention pruning (\sangyan/async_exec/repository.py\, \sangyan/cli.py\):
+  1. Eligible Statuses Only: Only terminal operational records (\SUCCEEDED\, \CANCELLED\) older than \older_than_days\ can be pruned.
+  2. Inviolable Exclusions: \DEAD_LETTERED\ tasks are quarantine evidence and are strictly NON-PRUNABLE by automated jobs. All core domain records (\investigations\, \indings\, \vidence\, \	rust_receipts\, \udit_events\) reside in separate immutable relational tables completely untouched by task ledger pruning.
+  3. Safe Dialect Execution: Uses portable bounded chunked deletes (\SELECT task_id ... LIMIT ?\ followed by \DELETE WHERE task_id=?\), ensuring identical behavior across SQLite and PostgreSQL.
+  4. CLI & Scheduled Job: Exposed via \sangyan task prune --older-than-days 30\ with required confirmation.
+- Why: Prevents operational database bloat while strictly preserving all forensic evidence, quarantine records, and cryptographic trust receipts.
+- Alternatives considered: Deleting dead-lettered tasks (rejected: destroys evidence of system defects and security investigations).
+- Consequences: Bounded task ledger footprint with zero evidentiary data loss.
+- Files: \sangyan/async_exec/repository.py\, \sangyan/cli.py\, \	ests/test_phase10_cli.py
+---
 
+### D-079: Graceful Rolling Deployment, Lease Drain & Pod Disruption Budget Policy
+- Date / phase / commit: 2026-10-04, Phase 10
+- Context: Deploying updates to API and worker pods must not drop active investigations, break in-flight transactions, or cause split-brain lease contention.
+- Decision: Enhanced Kubernetes and container deployment configurations (\deploy/helm/sangyan/\):
+  1. PodDisruptionBudget (PDB): Added \	emplates/poddisruptionbudget.yaml\ with \minAvailable: 1\ for both API and worker deployments.
+  2. RollingUpdate Strategy: Configured \maxUnavailable: 0\ and \maxSurge: 1\ to ensure new pods are ready before retiring old ones.
+  3. Worker Drain & Termination Grace Period: Configured \	erminationGracePeriodSeconds: 120\ on worker deployments. On SIGTERM, worker closes stream consumer, drains in-flight tasks up to timeout, safely resets unacknowledged leases, and flushes metrics.
+  4. Schema Migration Safety: Validated that Migration 001..005 scripts are strictly backward compatible, idempotent, and executed via pre-rollout Helm Jobs with advisory locking (\pg_advisory_lock\), preventing deployment race conditions.
+- Why: Guarantees zero-downtime rolling upgrades and crash-safe worker shutdowns in production Kubernetes.
+- Alternatives considered: Abrupt pod kill with default 30s grace period (rejected: causes in-flight tasks to abort abruptly and require lease recovery timeouts).
+- Consequences: Smooth rolling updates without investigation interruption or database locking contention.
+- Files: \deploy/helm/sangyan/templates/poddisruptionbudget.yaml\, \deploy/helm/sangyan/templates/deployment-worker.yaml\, \	ests/test_phase10_k8s.py\, \	ests/test_phase10_migration_safety.py
+---
 
-
-
+### D-080: Controlled Failback & Multi-Region Epoch Split-Brain Immunity
+- Date / phase / commit: 2026-10-04, Phase 10
+- Context: Following a disaster recovery failover where Region B was promoted to primary (Epoch E+1) and Region A was fenced, repairing Region A requires a controlled failback procedure. Automatic failback risks split-brain dual writers and partitioned replication conflicts.
+- Decision: Implemented controlled failback state machine and tooling (\sangyan/dr/manager.py\, \sangyan/cli.py\):
+  1. Controlled Failback Sequence:
+     a. Primary verification: Region B must be confirmed active and current.
+     b. Target synchronization: Repaired Region A synchronizes relational database state from Region B.
+     c. Controlled Demotion: Region B is demoted to \STANDBY_READY\ and fenced against incoming writes.
+     d. Promotion with Monotonic Epoch: Region A is promoted to \PRIMARY_ACTIVE\, incrementing cluster epoch to E+2.
+     e. Standby Confirmation: Region B epoch is reconciled to E+2 in \STANDBY_READY\ state.
+  2. Split-Brain Red Team Verification: Exhaustive testing confirmed that stale workers from Region A reconnecting with old epochs, concurrent promotion attempts, and demoted primary writes are all rejected immediately with \StaleRegionError\ (\HTTP 409 Conflict\).
+  3. SHA3-256 Audit Chain Preservation: Validated that linear cryptographic audit hash chaining is continuous across both failover and failback events.
+- Why: Eliminates split-brain write hazards and preserves unbroken cryptographic audit integrity across the entire disaster lifecycle.
+- Alternatives considered: Automatic failback upon ping detection (rejected: hazardous due to flapping networks and incomplete database replication).
+- Consequences: Safe, operator-governed disaster failback with complete cryptographic continuity.
+- Files: \sangyan/dr/manager.py\, \sangyan/cli.py\, \	ests/test_phase10_dr_failback.py\, \	ests/test_phase10_full_dr_drill.py

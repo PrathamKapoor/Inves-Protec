@@ -32,7 +32,7 @@ data:
   {{- if .Values.config.tracingEnabled }}
   SANGYAN_TRACING_ENABLED: {{ .Values.config.tracingEnabled | quote }}
   SANGYAN_TRACE_SAMPLE_RATE: {{ .Values.config.traceSampleRate | default 0.1 | quote }}
-  SANGYAN_OTLP_ENDPOINT: {{ .Values.config.otlpEndpoint | default "" | quote }}
+  SANGYAN_OTEL_EXPORTER_ENDPOINT: {{ .Values.config.otelExporterEndpoint | default "" | quote }}
   {{- end }}
   {{- if .Values.config.backupStorageProvider }}
   SANGYAN_BACKUP_STORAGE_PROVIDER: {{ .Values.config.backupStorageProvider | quote }}
@@ -46,6 +46,11 @@ data:
   SANGYAN_TASK_QUEUE_GROUP: {{ .Values.config.taskQueueGroup | default "sangyan:task_workers" | quote }}
   SANGYAN_TASK_DEAD_LETTER_STREAM: {{ .Values.config.taskDeadLetterStream | default "sangyan:tasks:dead_letter" | quote }}
   SANGYAN_TASK_LEASE_DURATION_SEC: {{ .Values.config.taskLeaseDurationSec | default 60 | quote }}
+  SANGYAN_TASK_MAX_OUTSTANDING_PER_TENANT: {{ .Values.config.taskMaxOutstandingPerTenant | default 1000 | quote }}
+  SANGYAN_MAX_CONTENTS_PER_WORKFLOW_REQUEST: {{ .Values.config.maxContentsPerWorkflowRequest | default 100 | quote }}
+  SANGYAN_TASK_RETRY_SWEEP_INTERVAL_SEC: {{ .Values.config.taskRetrySweepIntervalSec | default 1.0 | quote }}
+  SANGYAN_TASK_STALE_QUEUE_REQUEUE_SEC: {{ .Values.config.taskStaleQueueRequeueSec | default 30.0 | quote }}
+  SANGYAN_WORKER_CONCURRENCY: {{ .Values.config.workerConcurrency | default 4 | quote }}
   {{- end }}
   {{- if .Values.config.regionId }}
   SANGYAN_REGION_ID: {{ .Values.config.regionId | quote }}

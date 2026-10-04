@@ -13,7 +13,10 @@ from sangyan.core.errors import (
     NotFoundError,
     TaskNotFoundError,
 )
+from sangyan.core.logging import get_logger
 from sangyan.database.engine import DatabaseEngine
+
+logger = get_logger("sangyan.async_exec.repository")
 
 
 class AsyncTaskRepository:
@@ -37,8 +40,9 @@ class AsyncTaskRepository:
             INSERT INTO sangyan_async_tasks (
                 task_id, organization_id, user_id, investigation_id, task_type,
                 status, payload, result, error_message, retry_count, max_retries,
-                lease_owner, lease_expires_at, created_at, updated_at, completed_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                lease_owner, lease_expires_at, next_attempt_at,
+                created_at, updated_at, completed_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 task.task_id,
@@ -54,6 +58,7 @@ class AsyncTaskRepository:
                 task.max_retries,
                 task.lease_owner,
                 task.lease_expires_at,
+                task.next_attempt_at,
                 task.created_at,
                 task.updated_at,
                 task.completed_at,
@@ -143,7 +148,7 @@ class AsyncTaskRepository:
             rowcount = self._db.execute(
                 """
                 UPDATE sangyan_async_tasks
-                SET status=?, lease_owner=?, lease_expires_at=?, updated_at=?
+                SET status=?, lease_owner=?, lease_expires_at=?, next_attempt_at=NULL, updated_at=?
                 WHERE task_id=? AND (status IN (?,?) OR lease_expires_at < ?)
                 """,
                 (
@@ -190,7 +195,7 @@ class AsyncTaskRepository:
         rowcount = self._db.execute(
             """
             UPDATE sangyan_async_tasks
-            SET status=?, result=?, lease_owner=NULL, lease_expires_at=NULL,
+            SET status=?, result=?, lease_owner=NULL, lease_expires_at=NULL, next_attempt_at=NULL,
                 updated_at=?, completed_at=?
             WHERE task_id=? AND (lease_owner=? OR lease_owner IS NULL) AND status=?
             """,
@@ -213,7 +218,12 @@ class AsyncTaskRepository:
         error_message: str,
         is_transient: bool = True,
     ) -> AsyncTask:
-        """Record task failure; transition to RETRY_WAIT (if retries remain) or DEAD_LETTERED."""
+        """Record task failure; transition to RETRY_WAIT (if retries remain) or DEAD_LETTERED.
+
+        Transient failures persist an explicit ``next_attempt_at`` retry deadline so a
+        relational sweeper can re-drive delivery without any worker blocking inline or
+        holding crash-unsafe in-process timers.
+        """
         now = time.time()
         with self._db.transaction():
             task = self.get_task(task_id)
@@ -221,15 +231,21 @@ class AsyncTaskRepository:
 
             if is_transient and new_retry_count <= task.max_retries:
                 target_status = TaskStatus.RETRY_WAIT
-                # Clear lease so worker/backoff can re-claim
+                backoff_delay = task.compute_backoff_delay()
+                next_attempt_at = now + backoff_delay
+                # Clear lease so any worker/sweeper can re-drive after backoff
                 self._db.execute(
                     """
                     UPDATE sangyan_async_tasks
                     SET status=?, error_message=?, retry_count=?, lease_owner=NULL,
-                        lease_expires_at=NULL, updated_at=?
+                        lease_expires_at=NULL, next_attempt_at=?, updated_at=?
                     WHERE task_id=?
                     """,
-                    (target_status, error_message, new_retry_count, now, task_id),
+                    (target_status, error_message, new_retry_count, next_attempt_at, now, task_id),
+                )
+                logger.info(
+                    "Task %s failed transiently; retry %d/%d scheduled in %.2fs",
+                    task_id, new_retry_count, task.max_retries, backoff_delay,
                 )
             else:
                 target_status = TaskStatus.DEAD_LETTERED
@@ -237,7 +253,7 @@ class AsyncTaskRepository:
                     """
                     UPDATE sangyan_async_tasks
                     SET status=?, error_message=?, retry_count=?, lease_owner=NULL,
-                        lease_expires_at=NULL, updated_at=?, completed_at=?
+                        lease_expires_at=NULL, next_attempt_at=NULL, updated_at=?, completed_at=?
                     WHERE task_id=?
                     """,
                     (target_status, error_message, new_retry_count, now, now, task_id),
@@ -249,6 +265,10 @@ class AsyncTaskRepository:
             task.lease_owner = None
             task.lease_expires_at = None
             task.updated_at = now
+            if target_status == TaskStatus.RETRY_WAIT:
+                task.next_attempt_at = next_attempt_at
+            else:
+                task.next_attempt_at = None
             if target_status == TaskStatus.DEAD_LETTERED:
                 task.completed_at = now
             return task
@@ -267,7 +287,7 @@ class AsyncTaskRepository:
                 """
                 UPDATE sangyan_async_tasks
                 SET status=?, retry_count=0, error_message=NULL, lease_owner=NULL, lease_expires_at=NULL,
-                    updated_at=?, completed_at=NULL
+                    next_attempt_at=NULL, updated_at=?, completed_at=NULL
                 WHERE task_id=?
                 """,
                 (TaskStatus.QUEUED, now, task_id),
@@ -357,3 +377,137 @@ class AsyncTaskRepository:
             (TaskStatus.LEASED, TaskStatus.RUNNING, current),
         )
         return [AsyncTask.from_dict(r) for r in rows]
+
+    def find_retry_due_tasks(self, now: Optional[float] = None, limit: int = 50) -> list[AsyncTask]:
+        """Find RETRY_WAIT tasks whose backoff deadline has elapsed and require re-delivery."""
+        current = now if now is not None else time.time()
+        rows = self._db.query_all(
+            """
+            SELECT * FROM sangyan_async_tasks
+            WHERE status=? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            ORDER BY next_attempt_at ASC LIMIT ?
+            """,
+            (TaskStatus.RETRY_WAIT, current, limit),
+        )
+        return [AsyncTask.from_dict(r) for r in rows]
+
+    def mark_retry_requeued(self, task_id: str, now: Optional[float] = None) -> bool:
+        """Atomically flip a due RETRY_WAIT task to QUEUED so exactly one sweeper re-enqueues it.
+
+        Returns True only for the winning caller; losing racers observe rowcount 0 and skip.
+        """
+        current = now if now is not None else time.time()
+        rowcount = self._db.execute(
+            """
+            UPDATE sangyan_async_tasks
+            SET status=?, updated_at=?
+            WHERE task_id=? AND status=? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            """,
+            (TaskStatus.QUEUED, current, task_id, TaskStatus.RETRY_WAIT, current),
+        )
+        return rowcount > 0
+
+    def find_stale_queued_tasks(self, older_than_sec: float = 30.0, limit: int = 50) -> list[AsyncTask]:
+        """Find QUEUED tasks never delivered to the broker (outbox re-drive).
+
+        Covers worker crashes between relational QUEUED transition and broker enqueue,
+        and re-drives task ledger truth after Redis stream loss.
+        """
+        now = time.time()
+        rows = self._db.query_all(
+            """
+            SELECT * FROM sangyan_async_tasks
+            WHERE status=? AND updated_at <= ? AND (lease_expires_at IS NULL OR lease_expires_at < ?)
+            ORDER BY updated_at ASC LIMIT ?
+            """,
+            (TaskStatus.QUEUED, now - older_than_sec, now, limit),
+        )
+        return [AsyncTask.from_dict(r) for r in rows]
+
+    def count_outstanding_tasks(
+        self,
+        organization_id: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> int:
+        """Count non-terminal (in-flight or awaiting delivery) tasks, optionally per tenant."""
+        current = now if now is not None else time.time()
+        query = """
+            SELECT COUNT(*) AS n FROM sangyan_async_tasks
+            WHERE status IN (?,?,?,?,?)
+              AND (lease_expires_at IS NULL OR lease_expires_at >= ?)
+        """
+        params: list[Any] = [
+            TaskStatus.QUEUED,
+            TaskStatus.LEASED,
+            TaskStatus.RUNNING,
+            TaskStatus.RETRY_WAIT,
+            TaskStatus.FAILED,
+            current,
+        ]
+        if organization_id:
+            query += " AND organization_id=?"
+            params.append(organization_id)
+        row = self._db.query_one(query, tuple(params))
+        return int(row["n"]) if row else 0
+
+    def count_tasks_by_status(self, organization_id: Optional[str] = None) -> dict[str, int]:
+        """Aggregate task counts per status for queue-depth telemetry."""
+        query = "SELECT status, COUNT(*) AS n FROM sangyan_async_tasks"
+        params: list[Any] = []
+        if organization_id:
+            query += " WHERE organization_id=?"
+            params.append(organization_id)
+        query += " GROUP BY status"
+        rows = self._db.query_all(query, tuple(params))
+        return {r["status"]: int(r["n"]) for r in rows}
+
+    # Statuses eligible for operational-telemetry retention pruning.
+    # DEAD_LETTERED is NEVER auto-prunable (investigation/quarantine evidence);
+    # non-terminal statuses are never prunable (work in flight).
+    PRUNEABLE_STATUSES = (TaskStatus.SUCCEEDED, TaskStatus.CANCELLED)
+
+    def prune_tasks(
+        self,
+        older_than_days: float,
+        status: Optional[str] = None,
+        organization_id: Optional[str] = None,
+        limit: int = 1000,
+    ) -> int:
+        """Delete terminal task ledger rows older than the retention window.
+
+        Restricts to terminal operational statuses (SUCCEEDED/CANCELLED by
+        default). Dead-lettered tasks and audit records are never removed by
+        this path; investigation evidence lives in separate tables untouched
+        by retention.
+        """
+        statuses = (status,) if status else self.PRUNEABLE_STATUSES
+        for s in statuses:
+            if s not in self.PRUNEABLE_STATUSES:
+                raise DomainValidationError(
+                    f"Refusing to prune status '{s}': only {self.PRUNEABLE_STATUSES} are retention-prunable. "
+                    "Dead-lettered tasks are quarantine evidence and audit events are cryptographic records."
+                )
+
+        cutoff = time.time() - max(0.0, older_than_days) * 86400.0
+        deleted = 0
+        for s in statuses:
+            # Portable bounded delete (works on SQLite and PostgreSQL without
+            # dialect-specific DELETE ... LIMIT syntax).
+            select_sql = (
+                "SELECT task_id FROM sangyan_async_tasks "
+                "WHERE status=? AND completed_at IS NOT NULL AND completed_at <= ?"
+            )
+            select_params: list[Any] = [s, cutoff]
+            if organization_id:
+                select_sql += " AND organization_id=?"
+                select_params.append(organization_id)
+            select_sql += " LIMIT ?"
+            select_params.append(limit)
+            rows = self._db.query_all(select_sql, tuple(select_params))
+            for row in rows:
+                deleted += int(
+                    self._db.execute(
+                        "DELETE FROM sangyan_async_tasks WHERE task_id=?", (row["task_id"],)
+                    )
+                )
+        return deleted

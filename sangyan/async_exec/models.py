@@ -97,6 +97,7 @@ class AsyncTask:
     max_retries: int = 3
     lease_owner: Optional[str] = None
     lease_expires_at: Optional[float] = None
+    next_attempt_at: Optional[float] = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
@@ -147,6 +148,15 @@ class AsyncTask:
     def is_terminal(self) -> bool:
         return self.status in TaskStatus.TERMINAL
 
+    def is_retry_due(self, now: Optional[float] = None) -> bool:
+        """True when a RETRY_WAIT task is eligible for re-delivery."""
+        if self.status != TaskStatus.RETRY_WAIT:
+            return False
+        if self.next_attempt_at is None:
+            return True
+        current = now if now is not None else time.time()
+        return current >= self.next_attempt_at
+
     def compute_backoff_delay(
         self,
         base_sec: float = 1.0,
@@ -175,6 +185,7 @@ class AsyncTask:
             "max_retries": self.max_retries,
             "lease_owner": self.lease_owner,
             "lease_expires_at": self.lease_expires_at,
+            "next_attempt_at": self.next_attempt_at,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "completed_at": self.completed_at,
@@ -201,6 +212,7 @@ class AsyncTask:
             max_retries=int(d.get("max_retries", 3)),
             lease_owner=d.get("lease_owner"),
             lease_expires_at=float(d["lease_expires_at"]) if d.get("lease_expires_at") is not None else None,
+            next_attempt_at=float(d["next_attempt_at"]) if d.get("next_attempt_at") is not None else None,
             created_at=float(d.get("created_at", time.time())),
             updated_at=float(d.get("updated_at", time.time())),
             completed_at=float(d["completed_at"]) if d.get("completed_at") is not None else None,

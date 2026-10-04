@@ -649,7 +649,84 @@ Client Submission (POST /workflow/start?async_exec=true)
 
 ---
 
+---
+
+## 14. Phase 10: Operational Hardening, Load Validation, Observability & Failback Flow
+
+`	ext
+    [Client Submissions] ──(Admission & Bounds)──> [API / 202 Accepted]
+            │                                             │
+      (Backpressure: 429/503)                      [Relational Outbox]
+            │                                             │
+            ▼                                             ▼
+    [Quota / Queue Bounds]                         [Redis Streams]
+                                                          │
+                                                    (Consumer Group)
+                                                          │
+                                                          ▼
+                                                [Worker Fleet (1..N)]
+                                                ├─ Bounded Leasing
+                                                ├─ Periodic Heartbeat
+                                                ├─ HITL Pause & Free
+                                                └─ Telemetry Export
+                                                          │
+                                                          ▼
+                                            [Prometheus & Grafana]
+                                            (Alerts: Queue/DB/DR/Pool)
+
+    [Disaster Recovery Lifecycle]
+    Region A (Primary, Epoch 1) ──(Failure)──> Fenced (Epoch 1) ──(Writes Blocked: 409)
+                                                     │
+                                                     ▼
+                                            Region B (Promote: Epoch 2) ──(Writes Active)
+                                                     │
+                                                     ▼
+                                            Controlled Failback:
+                                            1. Re-sync State to Region A
+                                            2. Demote Region B -> STANDBY_READY
+                                            3. Promote Region A -> PRIMARY_ACTIVE (Epoch 3)
+                                            4. Cryptographic Audit Chain Continuous
+`
+
+1. Deterministic Load Testing & Concurrency Flow:
+   └─ LoadTestHarness                                      sangyan/observability/load_harness.py
+       ├─ Multi-tenant client simulation (configurable concurrency, duration, tenant count, task mix)
+       ├─ Granular percentile latency capture (p50, p95, p99) for API, queue, DB, Redis, and workers
+       ├─ Invariant assertion: zero cross-tenant state leakage, checkpoints, or dead letters
+       └─ CLI execution: 'sangyan load-test --concurrency 8 --tenants 4 --tasks 100'
+
+2. Admission Control & Backpressure Flow:
+   └─ SecurityMiddleware + API Routes                      sangyan/security/middleware.py
+       ├─ Maximum payload enforcement (2 MB body limit, 50 contents per request)
+       ├─ Tenant and cluster queue saturation defense (max outstanding tasks bounds)
+       ├─ Honest HTTP 429 / 503 responses with Retry-After headers when saturated
+       └─ Idempotency cache: duplicate task submissions return existing task record without double queuing
+
+3. Operational Observability & Early-Warning Alerting:
+   └─ Telemetry Metrics + Prometheus Alerts                sangyan/security/telemetry.py
+       ├─ Queue saturation gauges: queue depth by status, oldest task age, active leases, retries
+       ├─ Infrastructure gauges: DB pool active/idle, Redis stream backlog, Redis connection status
+       ├─ DR authority gauges: current cluster epoch, active region status, fencing violations
+       ├─ Alerting rules: queue congestion, worker starvation, pool exhaustion, split-brain detection
+       └─ Grafana dashboard: zero-config machine-readable JSON in deploy/observability/
+
+4. Controlled Disaster Recovery Failback Flow:
+   └─ DisasterRecoveryManager.failback_region()            sangyan/dr/manager.py
+       ├─ Target standby synchronization verification
+       ├─ Graceful demotion of current primary to STANDBY_READY with fencing assertion
+       ├─ Promotion of repaired original primary with monotonic cluster epoch increment
+       ├─ Pre-write fencing validation across all tenant repository operations
+       └─ SHA3-256 chained audit ledger continuity verified without forks or breaks
+
+5. Graceful Deployment & Pod Disruption Budget:
+   └─ Kubernetes PDB + RollingUpdate + Worker Drain        deploy/helm/sangyan/
+       ├─ PodDisruptionBudget with minAvailable: 1 for API and Worker pods
+       ├─ RollingUpdate maxUnavailable: 0, maxSurge: 1
+       ├─ Worker terminationGracePeriodSeconds: 120 with in-flight task drain on SIGTERM
+       └─ Atomic migration execution via pre-rollout Job with pg_advisory_lock
+
 ## Session Changelog
+
 
 | Area | Change | Files | Commit | Decision |
 |---|---|---|---|---|
@@ -742,14 +819,11 @@ Client Submission (POST /workflow/start?async_exec=true)
 | Pre-Write Authority Assertion | TenantRepository asserts region write authority on all write mutations; rejects writes if fenced or stale | `sangyan/tenancy/repository.py` | 5d014e4 | D-071 |
 | Phase 9 CLI & REST Endpoints | Add worker, dr status/promote/simulate, task list/inspect/dead-letter/retry commands and REST routes | `sangyan/cli.py`, `sangyan/api/routes.py`, `sangyan/api/app.py` | 5d014e4 | D-069, D-072 |
 | Phase 9 Comprehensive Test Suite | 36 new tests covering models, queues, worker, DR failover, API, and failure scenarios A-G (total 275 tests) | `tests/test_async_*.py`, `tests/test_dr_failover.py`, `tests/test_phase9_failure_scenarios.py` | 5d014e4 | D-067..D-073 |
-
-
-
-
-
-
-
-
-
-
-
+| Deterministic Load Harness | Configurable multi-tenant load generator, latency percentile calculator, and CLI command | sangyan/observability/load_harness.py, sangyan/cli.py | Working Tree | D-074 |
+| High-Resolution Telemetry | Queue depth, oldest task age, DB pool usage, Redis backlog, and DR epoch Prometheus metrics | sangyan/security/telemetry.py, deploy/observability/ | Working Tree | D-075 |
+| Production Alerting Rules | Standard Alertmanager rules for queue saturation, worker starvation, DB pool, and split-brain | deploy/observability/prometheus-alerts.yaml | Working Tree | D-076 |
+| Task Admission & Backpressure | 2 MB body bound, 50 content max limit, tenant outstanding task quotas, and honest 429/503 | sangyan/security/middleware.py, sangyan/api/routes.py | Working Tree | D-077 |
+| Operational Retention Pruning | Bounded, non-destructive pruning of SUCCEEDED/CANCELLED tasks preserving dead-letters and audit | sangyan/async_exec/repository.py, sangyan/cli.py | Working Tree | D-078 |
+| Kubernetes Hardening & PDB | PodDisruptionBudget, rolling update strategy, 120s worker drain, and migration lock safety | deploy/helm/sangyan/, sangyan/async_exec/worker.py | Working Tree | D-079 |
+| Controlled DR Failback | Safe multi-stage failback state machine, monotonic epoch progression, and audit continuity | sangyan/dr/manager.py, sangyan/cli.py | Working Tree | D-080 |
+| Phase 10 Verification Suite | 96 new tests covering load, backpressure, backup drill, CLI, failback, full DR, k8s, security, stress | 	ests/test_phase10_*.py | Working Tree | D-074..D-080 |

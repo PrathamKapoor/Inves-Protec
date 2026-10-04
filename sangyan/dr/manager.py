@@ -9,6 +9,7 @@ from sangyan.core.logging import get_logger
 from sangyan.crypto.hashing import sha3_hex
 from sangyan.database.engine import DatabaseEngine
 from sangyan.dr.models import RegionFencingRecord, RegionRole
+from sangyan.security.telemetry import MetricsRegistry
 
 logger = get_logger("sangyan.dr")
 
@@ -27,7 +28,12 @@ class DisasterRecoveryManager:
         self.region_id = region_id
         self.default_role = default_role
         self.default_epoch = default_epoch
+        self.metrics = MetricsRegistry.get_default()
         self.ensure_registered()
+        try:
+            self.metrics.dr_cluster_epoch.set(self.get_region().cluster_epoch)
+        except Exception:
+            pass
 
     def ensure_registered(self) -> None:
         """Register region in sangyan_region_fencing if not already present."""
@@ -100,18 +106,31 @@ class DisasterRecoveryManager:
         """Assert that the specified (or local) region possesses active primary write authority.
 
         Raises StaleRegionError if fenced, standby, or behind the latest cluster epoch.
+        Every rejection is counted as a split-brain fencing telemetry event.
         """
         target = region_id or self.region_id
         row = self._db.query_one("SELECT * FROM sangyan_region_fencing WHERE region_id=?", (target,))
         if row is None:
+            try:
+                self.metrics.dr_fencing_rejections_total.inc()
+            except Exception:
+                pass
             raise StaleRegionError(f"Region '{target}' is not registered; write rejected.")
 
         rec = RegionFencingRecord.from_dict(row)
         if rec.is_fenced:
+            try:
+                self.metrics.dr_fencing_rejections_total.inc()
+            except Exception:
+                pass
             reason = f" (reason: {rec.fence_reason})" if rec.fence_reason else ""
             raise StaleRegionError(f"Region '{target}' is fenced{reason}. Pre-write validation failed.")
 
         if rec.role != RegionRole.PRIMARY_ACTIVE:
+            try:
+                self.metrics.dr_fencing_rejections_total.inc()
+            except Exception:
+                pass
             raise StaleRegionError(
                 f"Region '{target}' has role '{rec.role}', not '{RegionRole.PRIMARY_ACTIVE}'. Writes rejected."
             )
@@ -121,6 +140,10 @@ class DisasterRecoveryManager:
         max_epoch = int(max_row["max_epoch"]) if max_row and max_row.get("max_epoch") is not None else rec.cluster_epoch
 
         if rec.cluster_epoch < max_epoch:
+            try:
+                self.metrics.dr_fencing_rejections_total.inc()
+            except Exception:
+                pass
             raise StaleRegionError(
                 f"Region '{target}' epoch ({rec.cluster_epoch}) is stale; current cluster epoch is {max_epoch}. Split-brain prevented."
             )
@@ -192,6 +215,37 @@ class DisasterRecoveryManager:
             )
 
         logger.info("Promoted region %s to PRIMARY_ACTIVE (epoch %d): %s", region_id, new_epoch, reason)
+        try:
+            self.metrics.dr_promotions_total.labels(status="success").inc()
+            self.metrics.dr_cluster_epoch.set(new_epoch)
+        except Exception:
+            pass
+        return self.get_region(region_id)
+
+    def demote_region(self, region_id: str, reason: str = "", fence: bool = False) -> RegionFencingRecord:
+        """Controlled demotion of a region from PRIMARY_ACTIVE to STANDBY_READY (or FENCED).
+
+        Used for controlled failback: after a failover, the repaired original region is
+        re-promoted explicitly by an operator; the interim active region is first demoted
+        here so exactly one PRIMARY_ACTIVE exists at any moment. Automatic failback is
+        intentionally not supported (see D-078).
+        """
+        now = time.time()
+        with self._db.transaction():
+            row = self._db.query_one("SELECT * FROM sangyan_region_fencing WHERE region_id=?", (region_id,))
+            if row is None:
+                raise NotFoundError(f"Cannot demote unregistered region '{region_id}'")
+            rec = RegionFencingRecord.from_dict(row)
+            target_role = RegionRole.FENCED if fence else RegionRole.STANDBY_READY
+            self._db.execute(
+                """
+                UPDATE sangyan_region_fencing
+                SET role=?, is_fenced=?, fence_reason=?, updated_at=?
+                WHERE region_id=?
+                """,
+                (target_role, 1 if fence else rec.is_fenced, reason or None, now, region_id),
+            )
+        logger.info("Demoted region %s to %s: %s", region_id, target_role, reason)
         return self.get_region(region_id)
 
     def simulate_failover(

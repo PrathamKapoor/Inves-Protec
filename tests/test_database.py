@@ -57,7 +57,7 @@ class TestMigrations:
     def test_migration_runner_applies_tables(self, temp_db):
         runner = MigrationRunner(temp_db)
         applied = runner.migrate()
-        assert len(applied) == 5
+        assert len(applied) == 6
         assert "001_create_sangyan_core_tables" in applied[0]
         assert "002_create_sangyan_correlation_and_guidance_tables" in applied[1]
         assert "003_create_sangyan_workflow_runs_table" in applied[2]

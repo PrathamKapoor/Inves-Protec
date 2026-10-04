@@ -1,0 +1,18 @@
+{{- if and .Values.worker.enabled (gt (int .Values.worker.replicaCount) 1) }}
+# PodDisruptionBudget for async workers: guarantees at least one worker survives
+# voluntary disruptions (node drains, cluster upgrades) so task processing and
+# lease recovery never lose all capacity at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "sangyan.fullname" . }}-worker
+  labels:
+    {{- include "sangyan.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "sangyan.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+{{- end }}

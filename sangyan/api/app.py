@@ -231,6 +231,14 @@ def create_app(
         lifespan=lifespan,
     )
 
+    # Expose core subsystems for operational introspection and tests
+    app.state.config = app_config
+    app.state.db_engine = db_engine
+    app.state.task_queue = t_queue
+    app.state.workflow_service = wf_service
+    app.state.dr_manager = dr_mgr
+    app.state.metrics = metrics
+
     # 1. Telemetry middleware (low-cardinality Prometheus collector)
     app.add_middleware(PrometheusMetricsMiddleware, metrics_registry=metrics)
 
@@ -250,7 +258,7 @@ def create_app(
         setup_tracer(
             service_name="sangyan-api",
             sample_rate=app_config.trace_sample_rate,
-            exporter_endpoint=app_config.otlp_endpoint,
+            exporter_endpoint=app_config.otel_exporter_endpoint,
         )
     app.add_middleware(TracingMiddleware)
 
@@ -274,6 +282,8 @@ def create_app(
         metrics_registry=metrics,
         task_queue=t_queue,
         dr_manager=dr_mgr,
+        max_outstanding_tasks_per_tenant=app_config.task_max_outstanding_per_tenant,
+        max_contents_per_request=app_config.max_contents_per_workflow_request,
     )
     views_router = get_views_router(repository_factory, t_service)
 

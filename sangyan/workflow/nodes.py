@@ -15,6 +15,7 @@ from sangyan.correlation.grievance import GrievanceRouter
 from sangyan.correlation.guidance import GuidanceEngine
 from sangyan.correlation.scam_chains import ScamChainReconstructor
 from sangyan.correlation.taxonomy import ScamTaxonomyClassifier
+from sangyan.core.logging import get_logger
 from sangyan.domain.models import (
     ActionGuidance,
     Claim,
@@ -27,7 +28,10 @@ from sangyan.domain.models import (
     InvestigationStage,
     Review,
     Signal,
+    normalize_content_type,
 )
+
+logger = get_logger("sangyan.workflow.nodes")
 from sangyan.intelligence.pipeline import ContentIntelligenceEngine
 from sangyan.tenancy.repository import TenantRepository
 from sangyan.verification.engine import ClaimVerificationEngine, VerificationOutcome
@@ -97,10 +101,16 @@ class WorkflowNodeSuite:
 
         if repo is not None:
             for item in content_items:
+                item.content_type = normalize_content_type(item.content_type)
                 try:
                     repo.save_content_item(item)
-                except Exception:
-                    pass  # Item already persisted
+                except Exception as exc:
+                    # Duplicate persistence is benign; anything else must be visible
+                    if "unique" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                        logger.warning(
+                            "Intake could not persist content item %s for investigation %s: %s",
+                            item.id, inv_id, exc,
+                        )
 
             # Create or update investigation record in repository
             try:

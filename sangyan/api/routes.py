@@ -93,6 +93,8 @@ def get_api_router(
     metrics_registry: Optional[MetricsRegistry] = None,
     task_queue: Optional[Any] = None,
     dr_manager: Optional[Any] = None,
+    max_outstanding_tasks_per_tenant: Optional[int] = None,
+    max_contents_per_request: Optional[int] = None,
 ) -> APIRouter:
     """Build FastAPI router configured with verification engine, tenancy repository, and security boundary."""
     router = APIRouter(prefix="/api/v1", tags=["verification"])
@@ -121,6 +123,36 @@ def get_api_router(
             except Exception as e:
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
         return None
+
+    # Phase 10: per-tenant queue admission control (task flood protection).
+    admission_cap: Optional[int] = max_outstanding_tasks_per_tenant
+    max_contents: int = max_contents_per_request if max_contents_per_request and max_contents_per_request > 0 else 100
+
+    def _enforce_task_admission(repo: Any) -> None:
+        """Reject submissions when the tenant already holds too many non-terminal tasks.
+
+        Emits honest HTTP 429 semantics so clients back off instead of silently
+        saturating the queue and starving other tenants (queue saturation contract).
+        """
+        if admission_cap is None or admission_cap <= 0 or repo is None:
+            return
+        try:
+            outstanding = repo._task_repo.count_outstanding_tasks(organization_id=repo.organization_id)
+        except Exception:
+            return  # Admission control must never break submission on telemetry failure
+        if outstanding >= admission_cap:
+            try:
+                metrics.rate_limit_exceeded_total.labels(endpoint_class="task_admission").inc()
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"Tenant has {outstanding} outstanding async tasks (limit {admission_cap}). "
+                    "Reduce submission rate or resolve pending tasks before submitting more."
+                ),
+                headers={"Retry-After": "30"},
+            )
 
     # -----------------------------------------------------------------------
     # API Key Provisioning & Lifecycle (Admin Only)
@@ -353,8 +385,9 @@ def get_api_router(
         claim_type: Optional[str] = None,
         authority_tier: Optional[str] = None,
         authority: Optional[str] = None,
+        principal: Principal = Depends(_auth),
     ):
-        """List all controlled authoritative institutional sources registered in SANGYAN (public metadata)."""
+        """List all controlled authoritative institutional sources registered in SANGYAN (public metadata, authenticated)."""
         sources = engine.registry.list_sources(
             claim_type=claim_type,
             authority_tier=authority_tier,
@@ -533,12 +566,21 @@ def get_api_router(
             enforce_tenant_boundary(principal, req.organization_id, metrics)
         if not principal.has_permission("investigation:create"):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires investigation:create permission")
+        if len(req.contents) > max_contents:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Request contains {len(req.contents)} content items; "
+                    f"maximum per workflow request is {max_contents}."
+                ),
+            )
 
         repo = _get_repo(principal.organization_id, principal.principal_id)
         if not repo:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
 
         if async_exec:
+            _enforce_task_admission(repo)
             from sangyan.async_exec.models import AsyncTask, TaskStatus, TaskType
             from sangyan.domain.base import new_id
             task_id = new_id("tsk")
@@ -564,6 +606,10 @@ def get_api_router(
 
             if task_queue is not None:
                 task_queue.enqueue(task)
+            try:
+                metrics.tasks_total.labels(task_type=task.task_type, status=TaskStatus.QUEUED).inc()
+            except Exception:
+                pass
 
             response.status_code = status.HTTP_202_ACCEPTED
             return {
@@ -620,6 +666,7 @@ def get_api_router(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
 
         if async_exec:
+            _enforce_task_admission(repo)
             from sangyan.async_exec.models import AsyncTask, TaskStatus, TaskType
             from sangyan.domain.base import new_id
             task_id = new_id("tsk")
@@ -644,6 +691,10 @@ def get_api_router(
 
             if task_queue is not None:
                 task_queue.enqueue(task)
+            try:
+                metrics.tasks_total.labels(task_type=task.task_type, status=TaskStatus.QUEUED).inc()
+            except Exception:
+                pass
 
             response.status_code = status.HTTP_202_ACCEPTED
             return {
@@ -815,20 +866,28 @@ def get_api_router(
     @router.post("/tasks/{task_id}/retry", response_model=dict[str, Any])
     def retry_task(
         task_id: str,
+        organization_id: Optional[str] = Query(None),
         principal: Principal = Depends(_auth),
     ):
         """Re-queue a dead-lettered async task."""
+        if organization_id:
+            enforce_tenant_boundary(principal, organization_id, metrics)
         if not (principal.has_permission("investigation:create") or principal.has_permission("tenant:manage")):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Requires investigation:create permission")
 
         repo = _get_repo(principal.organization_id, principal.principal_id)
         if not repo:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Authentication required")
+        _enforce_task_admission(repo)
 
         try:
             task = repo.retry_dead_letter_task(task_id)
             if task_queue is not None:
                 task_queue.enqueue(task)
+            try:
+                metrics.tasks_total.labels(task_type=task.task_type, status=TaskStatus.QUEUED).inc()
+            except Exception:
+                pass
             return task.to_dict()
         except TaskNotFoundError:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Task '{task_id}' not found")

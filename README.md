@@ -396,6 +396,38 @@ In a cross-region active-passive setup (e.g., Primary: `ap-south-1`, Standby: `e
    dr_manager.verify_audit_continuity(tenant_repo)
    ```
 
+### 8. Controlled Disaster Recovery Failback
+Following failover repair, return write authority safely to the original primary:
+```bash
+# Execute operator-confirmed controlled failback to region-a:
+python -m sangyan.cli dr failback --target-region region-a --confirm
+```
+This safely demotes the secondary to `STANDBY_READY`, promotes `region-a` with incremented cluster epoch, reconciles state, and verifies unbroken cryptographic audit chain continuity.
+
+### 9. Load Testing & Concurrency Validation Harness
+```bash
+# Run deterministic multi-tenant load validation
+python -m sangyan.cli load-test \
+  --concurrency 8 \
+  --tenants 4 \
+  --tasks 100 \
+  --output load_results.json
+```
+
+### 10. Operational Task Retention Pruning
+```bash
+# Prune old terminal tasks (SUCCEEDED, CANCELLED) older than 30 days
+# (Dead letters and audit logs are never pruned)
+python -m sangyan.cli task prune --older-than-days 30 --confirm
+```
+
+---
+
+## Observability, Dashboards & Alerting
+
+- **Grafana Dashboard**: Import `deploy/observability/grafana-dashboard.json` into Grafana for real-time visualization of queue depth by status, worker utilization, DB connection pool state, Redis backlog, and DR epoch.
+- **Prometheus Alert Rules**: Deploy `deploy/observability/prometheus-alerts.yaml` to Alertmanager for automated early-warning alerts on queue congestion, worker fleet starvation, database connection exhaustion, and DR authority conflicts.
+- **Distributed Tracing**: Standard W3C `traceparent` headers with OpenTelemetry collectors, strictly enforcing epistemic redaction of investment claims, PII, and credentials.
 
 ---
 
