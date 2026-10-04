@@ -290,6 +290,70 @@ Investigation Initiation / Resume
 
 ---
 
+## 10. Phase 6 Production API, Authentication, Authorization & Security Hardening
+
+Phase 6 hardens SANGYAN for production operation by establishing an external authentication gateway, strict multi-tenant boundary guardrails, contextual RBAC enforcement, token-bucket traffic shaping, HTTP transport security, and low-cardinality observability.
+
+```text
+                                INCOMING HTTP REQUEST
+                                          │
+                  ┌───────────────────────┴───────────────────────┐
+                  ▼                                               ▼
+         [X-Request-ID Header]                           [Content-Length Check]
+       Inject / propagate trace id                     Reject > 2 MB with 413
+                  │                                               │
+                  └───────────────────────┬───────────────────────┘
+                                          │
+                                          ▼
+                         [Defensive Security Headers]
+                 nosniff, DENY, CSP, Referrer-Policy, no-store
+                                          │
+                                          ▼
+                            [Token-Bucket Rate Limiter]
+               IP failed-auth lockout (5 strikes -> 429 Retry-After)
+               Multi-dimensional endpoint categories:
+               auth (10), investigate (30), mutate (20), read (120)
+                                          │
+                                          ▼
+                          [External Gateway Authenticator]
+                                          │
+            ┌─────────────────────────────┴─────────────────────────────┐
+            ▼                                                           ▼
+     [Bearer JWT Token]                                        [X-API-Key Header]
+   - Allowlist: HS256, RS256, ES256, EdDSA                    - Format: sgy_<8hex>_<32hex>
+   - Reject alg=none immediately                              - O(1) prefix indexed lookup
+   - Claims: iss, aud, exp, nbf, iat, sub, org_id             - Constant-time HMAC comparison
+   - 30s clock skew tolerance                                 - Active / expiry / revocation check
+   - Build canonical Principal                                - Update last_used_at timestamp
+            │                                                           │
+            └─────────────────────────────┬─────────────────────────────┘
+                                          │
+                     (Ambiguous: Both Bearer & Key -> 400 Bad Request)
+                     (Missing / Expired / Invalid -> 401 Unauthorized)
+                                          │
+                                          ▼
+                         [Contextual Multi-Tenant RBAC]
+            - Enforce caller tenant: principal.org_id == req.org_id (403 on mismatch)
+            - Prevent IDOR/BOLA: foreign tenant resources return 404 (zero enumeration)
+            - sangyan_viewer: read-only investigations and receipts (create/mutate -> 403)
+            - sangyan_analyst: create, investigate, workflow start/resume/cancel
+            - sangyan_admin: all analyst capabilities + API key provisioning & revocation
+                                          │
+                                          ▼
+                            [Core REST & Workflow Handlers]
+            - Verify claims, verify content, multi-content investigate batch
+            - Durable LangGraph start, review/resume, cancel, state snapshot, runs ledger
+            - Admin API key generation (raw key returned once), listing, instant revocation
+                                          │
+                                          ▼
+                           [Low-Cardinality Observability]
+            - Prometheus /metrics: requests_total, latency, security_events, workflow_runs
+            - Route normalizer: /api/v1/investigations/{id} bounds label cardinality
+            - Sensitive-data redaction: auto-scrub JWTs, sgy_* keys, private keys, secrets
+```
+
+---
+
 ## Session Changelog
 
 | Area | Change | Files | Commit | Decision |
@@ -345,6 +409,16 @@ Investigation Initiation / Resume
 | PQC Trust Finalization | Post-review NIST FIPS 204 ML-DSA-65 investigation dossier signing with receipt idempotency | `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py` | aca648c | D-043 |
 | Workflow REST API Endpoints | /api/v1/workflow/start, /resume, /cancel, /state, /runs with full RBAC and tenant scoping | `sangyan/api/routes.py`, `sangyan/api/app.py`, `tests/test_api.py` | aca648c | D-037..D-043 |
 | Phase 5 Workflow Test Suite | 14 new comprehensive tests (12 workflow scenarios + 2 API lifecycle tests, total 145 tests) | `tests/test_workflow.py`, `tests/test_api.py` | aca648c | D-037..D-043 |
+| Migration 004 & API Keys Schema | sangyan_api_keys table with prefix indexing, tenant scoping, revocation, and last_used tracking | `sangyan/database/migrations.py`, `tests/test_database.py` | Pending | D-046 |
+| External Authentication Boundary | Multi-scheme JWT Bearer and hashed API key authentication with mutual exclusivity (400 on conflict) | `sangyan/security/models.py`, `sangyan/security/auth.py` | Pending | D-044 |
+| Cryptographic JWT Validation | Strict algorithm allowlist (HS256/RS256/ES256/EdDSA), RFC 7519 claims check, 30s clock skew | `sangyan/security/jwt.py` | Pending | D-045 |
+| Hashed API Key Management | Constant-time prefixed lookup, key generation, SHA-256 storage, and Admin CRUD endpoints | `sangyan/security/api_keys.py`, `sangyan/tenancy/repository.py`, `sangyan/api/routes.py` | Pending | D-046 |
+| Multi-Tenant RBAC & IDOR Defense | Zero-trust tenant parameter verification, sangyan_viewer/analyst/admin RBAC matrix, IDOR protection | `sangyan/security/auth.py`, `sangyan/api/routes.py` | Pending | D-047 |
+| Token-Bucket Rate Limiter | Sliding token bucket across 5 endpoint categories and failed-auth IP lockout middleware | `sangyan/security/rate_limiter.py`, `sangyan/security/middleware.py` | Pending | D-048 |
+| HTTP Transport Security Hardening | Defensive headers (nosniff, DENY, CSP), Cache-Control: no-store on API, 2 MB body bound, X-Request-ID | `sangyan/security/middleware.py`, `sangyan/api/app.py` | Pending | D-049 |
+| Low-Cardinality Telemetry & Redaction | Bounded Prometheus /metrics exporter, route normalizer, and sensitive credential log redaction | `sangyan/security/telemetry.py` | Pending | D-050 |
+| Phase 6 Security Test Suite | 32 new tests covering JWT, API keys, RBAC, IDOR, rate limiting, security headers, metrics (total 177 tests) | `tests/test_security_phase6.py`, `tests/test_database.py` | Pending | D-044..D-050 |
+
 
 
 

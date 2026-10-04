@@ -354,10 +354,35 @@ MIGRATION_003_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_sangyan_wf_status ON sangyan_workflow_runs(status)",
 )
 
+MIGRATION_004_STATEMENTS: tuple[str, ...] = (
+    # Hashed API Keys & Machine Credentials
+    """
+    CREATE TABLE IF NOT EXISTS sangyan_api_keys (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        key_prefix TEXT NOT NULL,
+        key_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        scopes TEXT NOT NULL DEFAULT '[]',
+        expires_at REAL,
+        revoked_at REAL,
+        last_used_at REAL,
+        created_at REAL NOT NULL,
+        schema_version INTEGER NOT NULL DEFAULT 1
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_api_keys_org_prefix ON sangyan_api_keys(organization_id, key_prefix)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_api_keys_prefix ON sangyan_api_keys(key_prefix)",
+    "CREATE INDEX IF NOT EXISTS idx_sangyan_api_keys_org ON sangyan_api_keys(organization_id)",
+)
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(1, "create_sangyan_core_tables", MIGRATION_001_STATEMENTS),
     Migration(2, "create_sangyan_correlation_and_guidance_tables", MIGRATION_002_STATEMENTS),
     Migration(3, "create_sangyan_workflow_runs_table", MIGRATION_003_STATEMENTS),
+    Migration(4, "create_sangyan_api_keys_table", MIGRATION_004_STATEMENTS),
 )
 
 

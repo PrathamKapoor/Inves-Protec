@@ -11,6 +11,7 @@ SANGYAN_ROLES = ("sangyan_admin", "sangyan_analyst", "sangyan_viewer")
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "sangyan_admin": {
         "tenant:manage",
+        "api_key:manage",
         "investigation:create",
         "investigation:read",
         "investigation:review",

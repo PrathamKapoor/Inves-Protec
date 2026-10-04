@@ -378,5 +378,105 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON sangyan_workflow_runs(org
 - **Role Enforcement**: `sangyan_viewer` role is strictly denied review submission (`PermissionDeniedError`).
 - **Post-Quantum Trust Finalization**: ML-DSA-65 post-quantum signing executes after the review gate commits. Re-invoking trust finalization idempotently returns the existing `TrustReceipt`.
 
+---
+
+## 9. Phase 6 Production Security, Authentication & Observability Models
+
+Phase 6 introduces external authentication schemes, hashed machine credentials, multi-tenant RBAC boundaries, token-bucket traffic shaping, and low-cardinality Prometheus telemetry.
+
+### 9.1 `Principal` (`sangyan.security.models`)
+Canonical representation of an authenticated calling identity bound at the API gateway layer:
+```python
+@dataclass(frozen=True)
+class Principal:
+    principal_id: str                   # User ID or machine client ID
+    organization_id: str                # Tenant boundary
+    roles: tuple[str, ...] = ("sangyan_viewer",)
+    scopes: tuple[str, ...] = ()
+    auth_method: str = "jwt"            # jwt | api_key | session | development
+    credential_id: Optional[str] = None # API Key ID or JWT JTI
+    issued_at: Optional[float] = None
+    expires_at: Optional[float] = None
+
+    @property
+    def primary_role(self) -> str: ...
+    def has_role(self, role: str) -> bool: ...
+    def has_permission(self, permission: str) -> bool: ...
+```
+
+### 9.2 `ApiKey` (`sangyan.security.models`)
+Relational model for hashed machine-to-machine API credentials:
+```python
+@dataclass
+class ApiKey:
+    organization_id: str
+    user_id: str
+    name: str
+    key_prefix: str                     # 8-hex character prefix for indexed O(1) lookup
+    key_hash: str                       # SHA-256 digest of prefix:secret
+    role: str = "sangyan_analyst"       # sangyan_admin | sangyan_analyst | sangyan_viewer
+    scopes: list[str] = field(default_factory=list)
+    id: str = field(default_factory=lambda: new_id("key"))
+    expires_at: Optional[float] = None
+    revoked_at: Optional[float] = None
+    last_used_at: Optional[float] = None
+    created_at: float = field(default_factory=time.time)
+    schema_version: int = CURRENT_SCHEMA_VERSION
+
+    def is_active(self, now: Optional[float] = None) -> bool: ...
+```
+
+### 9.3 `SecurityConfig` (`sangyan.security.models`)
+Production configuration for cryptographic JWT validation, allowed algorithms, key lifecycles, and bounds:
+```python
+@dataclass
+class SecurityConfig:
+    jwt_secret: str = "..."
+    jwt_public_key: Optional[str] = None
+    jwt_private_key: Optional[str] = None
+    jwt_algorithms: list[str] = field(default_factory=lambda: ["HS256"])  # HS256, RS256, ES256, EdDSA
+    jwt_issuer: str = "sangyan-auth"
+    jwt_audience: str = "sangyan-api"
+    jwt_leeway: int = 30                # RFC 7519 clock skew leeway in seconds
+    api_key_prefix: str = "sgy_"
+    max_request_body_bytes: int = 2 * 1024 * 1024  # 2 MB request bound
+    allowed_origins: list[str] = field(default_factory=lambda: ["*"])
+    rate_limit_enabled: bool = True
+```
+
+### 9.4 Migration 004 Schema Expansion
+Migration 004 (`sangyan/database/migrations.py`) registers the `sangyan_api_keys` relational ledger:
+```sql
+CREATE TABLE IF NOT EXISTS sangyan_api_keys (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    key_prefix TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
+    role TEXT NOT NULL,
+    scopes TEXT NOT NULL DEFAULT '[]',
+    expires_at REAL,
+    revoked_at REAL,
+    last_used_at REAL,
+    created_at REAL NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_sangyan_api_keys_org_prefix ON sangyan_api_keys(organization_id, key_prefix);
+CREATE INDEX IF NOT EXISTS idx_sangyan_api_keys_prefix ON sangyan_api_keys(key_prefix);
+CREATE INDEX IF NOT EXISTS idx_sangyan_api_keys_org ON sangyan_api_keys(organization_id);
+```
+
+### 9.5 Gateway Security & Observability Guarantees
+1. **Dual External Authentication**: Supports both interactive user sessions (JWT Bearer) and institutional integrations (prefixed hashed API keys: `sgy_<8hex>_<32hex>`).
+2. **Mutual Exclusivity**: Presenting both Bearer token and X-API-Key in a single request is rejected with HTTP 400 (`AmbiguousAuthenticationError`).
+3. **Cryptographic JWT Hardening**: Enforces RFC 7519 standard claims (`iss`, `aud`, `exp`, `nbf`, `iat`, `sub`, `org_id`), explicit algorithm allowlist, immediate rejection of `alg=none`, and bounded 30s clock skew tolerance.
+4. **Hashed API Key Storage**: The plaintext secret is never written to persistent disk; verification uses constant-time HMAC comparison (`hmac.compare_digest`) against SHA-256 digests.
+5. **Multi-Tenant Isolation & IDOR Defense**: The caller tenant `principal.organization_id` strictly binds repository operations. Attempts to access foreign-tenant investigations return HTTP 404/403 with zero cross-tenant enumeration.
+6. **Token-Bucket Rate Limiting**: Multi-dimensional token buckets per endpoint category (`auth`: 10 req/min, `investigation`: 30 req/min, `workflow_mutate`: 20 req/min, `read`: 120 req/min). Failed authentication attempts trigger IP-level backoff lockout (5 failures -> 429 Retry-After).
+7. **Transport Security & Bounds**: Emits defensive headers (`nosniff`, `DENY`, `strict-origin-when-cross-origin`, `CSP`, `Cache-Control: no-store` on API routes), limits body payloads to 2 MB (HTTP 413), and correlates requests via `X-Request-ID`.
+8. **Low-Cardinality Prometheus Observability**: Routes are normalized to route templates (`/api/v1/investigations/{id}`) to prevent label explosion. Logs and traces automatically scrub JWT tokens, API keys, private keys, passwords, and OTPs via `redact_sensitive_text`.
+
+
 
 

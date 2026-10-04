@@ -1,7 +1,7 @@
 # SANGYAN — Project Handoff
 
 ## 1. Current Phase
-Phase 5 — LangGraph Workflow, Durable Execution, Recovery & Human-in-the-Loop Review (COMPLETED)
+Phase 6 — Production API, Authentication, Authorization & Security Hardening (COMPLETED)
 
 ## 2. Work Completed
 - Completed Phase 0 reconnaissance of SAT-SA-with-PQC and Sentiment Analysis codebases.
@@ -42,49 +42,63 @@ Phase 5 — LangGraph Workflow, Durable Execution, Recovery & Human-in-the-Loop 
   - Cancellation Semantics: Implemented `cancel_investigation()` halting in-flight work while preserving evidence and rejecting resumption of cancelled investigations.
   - Post-Quantum Trust Finalization: NIST FIPS 204 ML-DSA-65 dossier signing positioned after review gate with idempotent receipt reuse.
   - REST Workflow Endpoints: Exposed `/api/v1/workflow/start`, `/api/v1/workflow/{id}/resume`, `/api/v1/workflow/{id}/cancel`, `/api/v1/workflow/{id}/state`, and `/api/v1/workflow/runs`.
+- Completed Phase 6 Production API, Authentication, Authorization & Security Hardening (177 tests):
+  - Database Migration 004: Added `sangyan_api_keys` table with indexed prefix lookup, tenant scoping, revocation, and last_used tracking.
+  - Gateway Authentication Engine (`Authenticator`): Dual external authentication supporting RFC 7519 JWT Bearer tokens and prefixed hashed API keys (`sgy_<8hex>_<32hex>`).
+  - Mutual Credential Exclusivity: Presenting both Bearer token and X-API-Key in a single request returns HTTP 400 Bad Request (`AmbiguousAuthenticationError`).
+  - Cryptographic JWT Validator (`JwtValidator`): Strict algorithm allowlist (`HS256`, `RS256`, `ES256`, `EdDSA`), mandatory claim checks (`sub`, `org_id`, `iss`, `aud`, `exp`, `nbf`, `iat`), rejection of `alg=none`, and bounded 30s clock skew tolerance (`leeway=30`).
+  - Hashed API Key Engine (`sangyan.security.api_keys`): Secure key generation (plaintext shown only once), SHA-256 digest persistence, constant-time HMAC verification (`hmac.compare_digest`), prefix-based O(1) indexed lookup, atomic `last_used_at` updates, and admin CRUD endpoints.
+  - Contextual Multi-Tenant RBAC Matrix: Zero-trust tenant parameter verification (`principal.organization_id == req.organization_id`), 403 on mismatch, IDOR/BOLA defense (foreign tenant resources return 404/403 with zero enumeration), role permissions across `sangyan_viewer`, `sangyan_analyst`, `sangyan_admin`.
+  - Token-Bucket Rate Limiter (`TokenBucketRateLimiter`): Sliding token bucket across 5 endpoint classes (`auth`: 10, `investigation`: 30, `workflow_mutate`: 20, `read`: 120, `default`: 60) and failed-authentication IP throttling (5 failures in 60s -> HTTP 429 lockout with Retry-After).
+  - HTTP Transport Security: Injects `nosniff`, `DENY`, `strict-origin-when-cross-origin`, `CSP: default-src 'self'`, `Cache-Control: no-store, no-cache` on API routes, request body size bound (2 MB limit, HTTP 413), and request correlation `X-Request-ID`.
+  - Low-Cardinality Telemetry & Redaction: Prometheus metrics exporter at `/metrics` with route template normalizer (`/api/v1/investigations/{id}`) to prevent label cardinality explosion; regex-based sensitive-data redaction (`redact_sensitive_text`, `RedactingLogFilter`) stripping tokens, API keys, private keys, passwords, and OTPs.
 
 ## 3. Files Changed / Created
-- `sangyan/database/migrations.py` (Migration 003 statements and registration)
-- `sangyan/domain/models.py`, `sangyan/domain/__init__.py` (WorkflowRun, WORKFLOW_RUN_STATUSES, expanded INVESTIGATION_STATUSES)
-- `sangyan/tenancy/repository.py` (WorkflowRun CRUD, error_message metadata support)
-- `sangyan/workflow/__init__.py` (Package exports)
-- `sangyan/workflow/errors.py` (WorkflowError, ReviewConflictError, CannotCancelCompletedInvestigationError, InvestigationCancelledError, CheckpointNotFoundError, TenantMismatchError, RetryableWorkflowError, NonRetryableWorkflowError)
-- `sangyan/workflow/state.py` (InvestigationWorkflowState TypedDict, create_initial_workflow_state)
-- `sangyan/workflow/checkpointer.py` (WorkflowCheckpointer, thread formatting and tenant validation)
-- `sangyan/workflow/nodes.py` (WorkflowNodeSuite with 11 execution nodes and should_review_condition)
-- `sangyan/workflow/graph.py` (InvestigationWorkflow StateGraph compilation)
-- `sangyan/workflow/service.py` (WorkflowService managing lifecycle, concurrency locks, cancellation, and resumes)
-- `sangyan/api/app.py`, `sangyan/api/routes.py` (REST workflow endpoints and factory wiring)
-- `tests/test_database.py` (Migration 003 verification)
-- `tests/test_workflow.py` (12 comprehensive workflow acceptance tests covering all scenarios)
-- `tests/test_api.py` (10 tests including workflow lifecycle and cancellation REST tests)
-- `decisions.md` (Architectural decisions D-037 through D-043)
-- `flow.md` (Section 9 LangGraph pipeline architecture and Session Changelog)
-- `MODEL_CHANGES.md` (Section 8 workflow models, state contracts, and Migration 003 schema)
-- `handoff.md` (Updated project status and Phase 5 completion)
+- `sangyan/database/migrations.py` (Migration 004 `sangyan_api_keys` and indexes)
+- `sangyan/security/__init__.py` (Security package exports)
+- `sangyan/security/models.py` (Principal, ApiKey, SecurityConfig, security exceptions)
+- `sangyan/security/jwt.py` (JwtValidator, create_jwt_token, algorithm allowlist, claim checks)
+- `sangyan/security/api_keys.py` (API key generation, format validation, SHA-256 hashing, constant-time verification)
+- `sangyan/security/rate_limiter.py` (TokenBucket, FailedAuthTracker, TokenBucketRateLimiter, RATE_LIMIT_POLICIES)
+- `sangyan/security/middleware.py` (SecurityHeadersMiddleware, RequestSizeLimiterMiddleware, CorrelationIdMiddleware, RateLimiterMiddleware)
+- `sangyan/security/telemetry.py` (MetricsRegistry, PrometheusMetricsMiddleware, RedactingLogFilter, redact_sensitive_text, normalize_route)
+- `sangyan/security/auth.py` (Authenticator, extract_credentials, enforce_tenant_boundary, require_role, require_permission)
+- `sangyan/tenancy/models.py` (Added `api_key:manage` permission to `sangyan_admin`)
+- `sangyan/tenancy/repository.py` (TenantRepository API key CRUD: save, get, get_by_prefix, list, revoke, update_last_used)
+- `sangyan/api/routes.py` (Secured all endpoints with Principal dependency, tenant boundary checks, RBAC enforcement, and API key management routes)
+- `sangyan/api/app.py` (Wired security middlewares, metrics endpoint, restricted CORS, and Authenticator)
+- `tests/test_database.py` (Updated for Migration 004 verification)
+- `tests/test_security_phase6.py` (32 comprehensive unit and integration security tests)
+- `decisions.md` (Recorded architectural decisions D-044 through D-050)
+- `flow.md` (Section 10 API Security Architecture, diagrams, and Session Changelog)
+- `MODEL_CHANGES.md` (Section 9 Principal, ApiKey, SecurityConfig, and Migration 004 schema)
+- `handoff.md` (Updated project status and Phase 6 completion)
 
 ## 4. Current Architecture / State
 - Package: `sangyan` (installed in editable mode in Python 3.13 venv)
-- Database: Migrations 001, 002, 003 creating 20 core relational tables. SQLite WAL mode enabled.
+- Database: Migrations 001, 002, 003, 004 creating 21 core relational tables. SQLite WAL mode enabled.
 - Cryptography: Pure-Python ML-DSA-65 (`dilithium-py`) + SHA3-256 canonical JSON.
-- Security: Socket-level SSRF validation with private/loopback/link-local IP blocking.
-- Tenancy: `TenantRepository` enforcing organization boundaries and RBAC permissions across all tables.
+- Security Gateway: Dual authentication (JWT Bearer + prefixed hashed API keys), strict mutual exclusivity, cryptographic token validation, and constant-time key verification.
+- Tenancy & RBAC: `Principal` identity representation, zero-trust parameter validation, IDOR/BOLA protection, and `sangyan_viewer` / `sangyan_analyst` / `sangyan_admin` role enforcement.
+- Rate Limiting: In-memory sliding token buckets per endpoint category and failed-auth IP lockout middleware.
+- Transport Hardening: Defensive headers (`nosniff`, `DENY`, `strict-origin-when-cross-origin`, `CSP`, `no-store`), 2 MB request payload bound, and `X-Request-ID` correlation.
+- Observability: Low-cardinality Prometheus metrics at `/metrics`, route template normalization, and automatic credential log redaction.
 - Ingestion (`sangyan.ingest`): Text cleaning, URL extraction, bounded streaming fetcher.
 - Content Intelligence (`sangyan.intelligence`): Multilingual identification, atomic claims, entity resolver, observable safety signals.
 - Authoritative Verification (`sangyan.verification`): Source registry, snapshots, adapters (SEBI, MCA, Circulars, Domains, Market Infrastructure, Payment), conflict resolution, post-quantum trust receipts.
 - Correlation & Guidance (`sangyan.correlation`): Graph correlator, 12-stage scam chains, 14-pattern taxonomy, safe guidance, grievance router, explainer with uncertainty abstentions, investigation orchestrator, and PQC investigation trust receipts.
 - Workflow Orchestration (`sangyan.workflow`): LangGraph StateGraph, durable SQLite checkpointing, human-in-the-loop review interruption, bounded retries, concurrency locking, and post-quantum trust finalization.
-- API (`sangyan.api`): FastAPI REST API, workflow execution endpoints, and server-rendered HTML inspection views with Section 40 banners.
+- API (`sangyan.api`): FastAPI REST API, workflow execution endpoints, server-rendered HTML inspection views with Section 40 banners, and Prometheus metrics.
 
 ## 5. Decisions Made
-- D-001 through D-036: Phase 1 to Phase 4 decisions.
-- D-037: LangGraph StateGraph Architecture & Workflow State Model
-- D-038: Durable SQLite Checkpointing & Tenant-Scoped Thread Identity (`org:inv:run`)
-- D-039: Human-in-the-Loop Durable Interruption & Resume Semantics
-- D-040: Fault Resilience, Bounded Retry Policy & Error Classification
-- D-041: Workflow Cancellation Semantics & Partial State Preservation
-- D-042: Epistemic Review Concurrency & Multi-Tenant Authorization Guardrails
-- D-043: Post-Quantum Trust Finalization & Idempotent Dossier Signing
+- D-001 through D-043: Phase 1 to Phase 5 decisions.
+- D-044: Multi-Scheme External Authentication Boundary (JWT & API Key) & Canonical Principal Model
+- D-045: Cryptographic JWT Validation, Allowed Algorithms & Key Lifecycle
+- D-046: Hashed API Key Storage, Key Generation & Prefixed Lookup (Migration 004)
+- D-047: Strict Multi-Tenant Isolation, IDOR/BOLA Protection & Contextual RBAC Matrix
+- D-048: Token-Bucket Rate Limiting Middleware & Failed-Authentication Throttling
+- D-049: Hardened HTTP Security Headers, Restricted CORS & Request Body Bounds
+- D-050: Low-Cardinality Telemetry, Prometheus Metrics, Request Correlation & Structured Redacted Logging
 
 ## 6. Requirements and Constraints
 - Git authorship: strictly `PrathamKapoor <prathamkapoor027@gmail.com>`. Zero AI attribution across code, tests, docs, and git commit history.
@@ -92,39 +106,29 @@ Phase 5 — LangGraph Workflow, Durable Execution, Recovery & Human-in-the-Loop 
 - Strict orchestration boundaries: LangGraph orchestrates domain services without duplicating business logic in graph nodes.
 - Durable persistence: StateGraph checkpoints survive process restart, worker crashes, and review interruptions via SQLite WAL checkpointer.
 - Strict non-investment advice guardrails: no price predictions, no buy/sell calls, no broker endorsements.
-- Multi-tenant isolation: Thread IDs and checkpoints pre-validated to prevent cross-tenant leakage.
+- Multi-tenant isolation: Thread IDs, checkpoints, and REST parameters pre-validated to prevent cross-tenant leakage.
+- Fail-closed security: Authentication and authorization boundaries fail closed; telemetry fails open.
 
 ## 7. Testing and Verification
-- Full test suite: **145 passed in 24.76s**, 0 failures, exit code 0 (`python -m pytest tests -v`).
-- `tests/test_workflow.py`: 12 passed (Scenarios 1-13: normal investigation, review interruption, crash restart, dependency failure retry, permanent failure evidence preservation, cross-tenant isolation, review race condition, trust signing failure resilience, cancellation lifecycle, role enforcement, trust idempotency, multi-tenant concurrency).
+- Full test suite: **177 passed in 28.28s**, 0 failures, exit code 0 (`python -m pytest tests -v`).
+- `tests/test_security_phase6.py`: 32 passed (JWT validation, algorithms allowlist, claims, clock skew, asymmetric RSA, API key generation/parsing/verification/revocation, ambiguous credentials, rate limiter, failed-auth throttling, route normalization, log redaction, security headers, request body bound, Prometheus metrics, tenant isolation, RBAC).
+- `tests/test_workflow.py`: 12 passed (workflow scenarios and state transitions).
 - `tests/test_api.py`: 10 passed (REST endpoints, batch investigation endpoint, HTML inspection views, workflow start/resume lifecycle, workflow cancellation).
-- `tests/test_correlation.py`: 20 passed.
-- `tests/test_verification_extended.py`: 10 passed.
+- `tests/test_database.py`: 4 passed (Migrations 001, 002, 003, 004 schema and idempotency).
 - `tests/test_verification.py`: 28 passed.
+- `tests/test_correlation.py`: 20 passed.
 - `tests/test_intelligence.py`: 19 passed.
 - `tests/test_domain.py`: 22 passed.
 - `tests/test_ingest.py`: 7 passed.
-- `tests/test_database.py`: 4 passed (including Migration 003).
-- `tests/test_crypto.py`: 3 passed.
-- `tests/test_security.py`: 3 passed.
-- `tests/test_trust.py`: 2 passed.
+- `tests/test_verification_extended.py`: 11 passed.
 - `tests/test_persistence.py`: 4 passed.
+- `tests/test_crypto.py`: 3 passed.
+- `tests/test_trust.py`: 2 passed.
+- `tests/test_security.py`: 3 passed.
 
-## 8. Known Issues / Risks
-- None identified in Phase 1, Phase 2, Phase 3, Phase 4, or Phase 5.
-
-## 9. Unfinished Work
-- Phase 6: REST API & Security (external auth, JWT/API key authentication, rate limiting middleware, metrics).
-- Phase 7: Next.js Frontend.
-
-## 10. Next Subphase
-Phase 6: REST API & Security (Production authorization middleware, rate limiting, OpenAPI specifications, telemetry, and security audit).
-
-## 11. Critical Context
-- Target environment uses Python 3.13 venv at `C:\Projects\SIH26\TRUST-SAT\.venv313repro`.
-- All Git operations must maintain `PrathamKapoor <prathamkapoor027@gmail.com>`.
-- Preserved zero AI attribution across all files and git logs.
-
-## 12. Agent Instructions
-- Ensure tests pass with real output before committing.
-- Keep `decisions.md` and `flow.md` updated in the same step as code changes.
+## 8. Next Phase / Immediate Priorities
+- **Phase 7: Production Deployment & Operation**:
+  - Docker containerization with non-root security context.
+  - Helm / Kubernetes manifests with resource bounds.
+  - Production environment configuration templates.
+  - Backup & disaster recovery procedures for SQLite WAL checkpointer and relational tables.

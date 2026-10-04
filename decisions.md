@@ -687,6 +687,133 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Tamper-evident, audit-ready investigation dossiers with post-quantum security guarantees.
 - Files: `sangyan/workflow/nodes.py`, `sangyan/workflow/service.py`, `tests/test_workflow.py`
 
+---
+
+### D-044: Multi-Scheme External Authentication Boundary (JWT & API Key) & Canonical Principal Model
+- Date / phase / commit: 2026-10-04, Phase 6
+- Context: External callers must be authenticated before accessing investigation or workflow services. The system must clearly distinguish unauthenticated (401), authenticated, and authorized (403) states. Both interactive user sessions (JWT) and automated institutional integrations (API keys) are required. Conflicting or ambiguous credentials presented in a single request must be deterministically rejected.
+- Decision: Implemented external authentication boundary and `Principal` model (`sangyan/security/models.py`, `sangyan/security/auth.py`):
+  1. Built immutable `Principal` dataclass carrying `principal_id`, `organization_id`, `roles`, `scopes`, `auth_method`, `credential_id`, `issued_at`, and `expires_at`.
+  2. Implemented dual authentication extraction: `Authorization: Bearer <token>` (JWT) and `X-API-Key: <key>` (API key).
+  3. Enforced mutual exclusivity: if both Bearer and X-API-Key headers are present, the request is rejected with HTTP 400 (`AmbiguousAuthenticationError`) to prevent credential confusion or privilege substitution.
+  4. Enforced fail-closed behavior: invalid or expired credentials fail with HTTP 401 and standard `WWW-Authenticate` header.
+  5. Clean downstream context: authentication is resolved once at the API boundary and attached to `request.state.principal`.
+- Why: Provides a single, unambiguous identity representation for downstream authorization while eliminating credential-juggling attacks.
+- Alternatives considered: Allowing JWT to override API key silently (rejected: creates security confusion and masks misconfigured automated clients).
+- Consequences: Transparent, auditable identity resolution across all endpoints.
+- Files: `sangyan/security/models.py`, `sangyan/security/auth.py`, `sangyan/api/app.py`
+
+---
+
+### D-045: Cryptographic JWT Validation, Allowed Algorithms & Key Lifecycle
+- Date / phase / commit: 2026-10-04, Phase 6
+- Context: Untrusted JWTs must be strictly validated against signature, algorithm, issuer, audience, and time validity before any claims are trusted. `alg=none`, unsigned tokens, and algorithm confusion attacks must be definitively prevented.
+- Decision: Implemented `JwtValidator` (`sangyan/security/jwt.py`):
+  1. Cryptographic validation using PyJWT (`jwt.decode`) against configured secret (symmetric HS256) or public key (asymmetric RS256/ES256/EdDSA).
+  2. Strict algorithm allowlist (`HS256`, `RS256`, `ES256`, `EdDSA`). Explicit rejection of `none` or unexpected algorithms.
+  3. Mandatory claims enforcement: validates `exp` (expiry), `nbf` (not-before), `iat` (issued-at), `iss` (issuer match), `aud` (audience match), `sub` (principal identity), and `org_id` (tenant boundary).
+  4. Explicit clock skew tolerance bounded to 30 seconds (`leeway=30`).
+  5. No remote JWKS fetching without caching and domain validation; rejects untrusted `kid` parameters.
+  6. Environment separation: production mode strictly requires configured non-default verification keys (`SANGYAN_JWT_SECRET` or `SANGYAN_JWT_PUBLIC_KEY`), failing startup if missing or weak.
+- Why: Defends against signature forgery, replay of expired tokens, and cross-issuer/cross-tenant token replay attacks.
+- Alternatives considered: Inspecting unverified payload claims prior to signature check (rejected: creates critical spoofing vulnerabilities).
+- Consequences: Provably sound JWT validation adhering to RFC 7519 standards.
+- Files: `sangyan/security/jwt.py`, `tests/test_security_phase6.py`
+
+---
+
+### D-046: Hashed API Key Storage, Key Generation & Prefixed Lookup (Migration 004)
+- Date / phase / commit: 2026-10-04, Phase 6
+- Context: Automated clients and server-to-server integrations require API key authentication. Storing plaintext API keys in relational storage creates critical database compromise risks. Keys must be queryable in O(1) without leaking hash timing information.
+- Decision: Implemented prefixed hashed API keys and Migration 004 (`sangyan/security/api_keys.py`, `sangyan/database/migrations.py`):
+  1. Key structure: `sgy_<prefix>_<secret>` where `prefix` is 8 hex characters (for indexed lookup) and `secret` is 32 secure hex characters (entropy >= 128 bits).
+  2. Secure hash storage: stores SHA-256 hash of `prefix:secret` in `sangyan_api_keys.key_hash`. Plaintext secret is never persisted and only displayed once upon generation.
+  3. Added Migration 004 table `sangyan_api_keys` with columns: `id`, `organization_id`, `user_id`, `name`, `key_prefix`, `key_hash`, `role`, `scopes`, `expires_at`, `revoked_at`, `last_used_at`, `created_at`.
+  4. Prefixed constant-time verification: lookup by `key_prefix`, compute SHA-256 over submitted secret, verify hash with `hmac.compare_digest`, check `revoked_at is None` and `expires_at > now()`, and atomically update `last_used_at`.
+  5. Lifecycle operations: supports creation, revocation (`revoked_at`), expiration checks, and scoped listing in `TenantRepository`.
+- Why: Prevents database credential dumps from yielding active API keys while maintaining high lookup performance without full-table scans.
+- Alternatives considered: Storing raw API keys (rejected: catastrophic failure mode on database breach) or unindexed bcrypt over whole key (rejected: O(N) database scan on every request).
+- Consequences: Secure, high-performance API key authentication with instant revocation.
+- Files: `sangyan/security/api_keys.py`, `sangyan/database/migrations.py`, `sangyan/tenancy/repository.py`
+
+---
+
+### D-047: Strict Multi-Tenant Isolation, IDOR/BOLA Protection & Contextual RBAC Matrix
+- Date / phase / commit: 2026-10-04, Phase 6
+- Context: External callers must never be able to access another tenant's investigations, claims, evidence, correlations, workflows, or audit logs by manipulating `organization_id` in request payloads, query strings, or path parameters.
+- Decision: Implemented tenant boundary enforcement and RBAC matrix (`sangyan/security/auth.py`, `sangyan/api/routes.py`):
+  1. Zero-trust parameter policy: `organization_id` is resolved exclusively from `principal.organization_id`. Any request body or query parameter claiming a different `organization_id` raises HTTP 403 `TenantMismatchError`.
+  2. IDOR/BOLA defense: every resource access (`get_investigation`, `get_workflow_state`, `list_workflow_runs`, `cancel_investigation`) enforces ownership against `principal.organization_id`. Non-existent or foreign-tenant resources return HTTP 404 (or 403) consistently to prevent cross-tenant ID enumeration.
+  3. Centralized RBAC enforcement:
+     - `sangyan_viewer`: read-only access to own tenant investigations and receipts.
+     - `sangyan_analyst`: create investigations, start workflows, review/resume workflows, cancel workflows.
+     - `sangyan_admin`: all analyst permissions + tenant management and API key lifecycle.
+  4. LangGraph thread identity protection: `<organization_id>:<investigation_id>:<run_id>` validated before any checkpointer interaction.
+- Why: Prevents horizontal and vertical privilege escalation and eliminates cross-tenant data leaks.
+- Alternatives considered: Trusting user-supplied `organization_id` with a database check (rejected: prone to parameter tampering and developer omission).
+- Consequences: Bulletproof tenant isolation enforced uniformly at the API gateway layer.
+- Files: `sangyan/security/auth.py`, `sangyan/api/routes.py`, `tests/test_security_phase6.py`
+
+---
+
+### D-048: Token-Bucket Rate Limiting Middleware & Failed-Authentication Throttling
+- Date / phase / commit: 2026-10-04, Phase 6
+- Context: The API must be protected against credential stuffing, denial-of-service, and resource exhaustion without introducing heavy external infrastructure like Redis for local single-node deployments.
+- Decision: Implemented in-memory sliding `TokenBucketRateLimiter` (`sangyan/security/rate_limiter.py`):
+  1. Multi-dimensional scoping: rate limits keyed by `(principal_id, endpoint_class)` for authenticated callers, and `(client_ip, endpoint_class)` for unauthenticated callers.
+  2. Endpoint classes:
+     - `auth`: 10 req/min (brute-force defense)
+     - `investigation`: 30 req/min (CPU-heavy content analysis)
+     - `workflow_mutate`: 20 req/min (start, resume, cancel)
+     - `read`: 120 req/min (query state, runs, inspection)
+     - `default`: 60 req/min
+  3. Failed-authentication throttling: tracks consecutive auth failures per client IP (threshold: 5 failures/min); locks out further attempts with HTTP 429 for a 60-second backoff window.
+  4. Standards-compliant response: returns HTTP 429 with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
+  5. Clean in-memory concurrency: thread-safe with lock, bounded memory cleanup of inactive buckets.
+- Why: Protects CPU-intensive cryptographic verification and LLM pipelines from exhaustion while stopping credential brute-force attacks.
+- Alternatives considered: Global rate limiter across all endpoints (rejected: allows read bursts to starve critical workflow operations).
+- Consequences: Fine-grained traffic shaping with zero external infrastructure dependencies.
+- Files: `sangyan/security/rate_limiter.py`, `tests/test_security_phase6.py`
+
+---
+
+### D-049: Hardened HTTP Security Headers, Restricted CORS & Request Body Bounds
+- Date / phase / commit: 2026-10-04, Phase 6
+- Context: Production APIs must protect against MIME-type sniffing, clickjacking, browser caching of financial data, cross-origin abuse, and unbounded payload denial-of-service.
+- Decision: Implemented `SecurityHeadersMiddleware`, restricted CORS, and request bounds (`sangyan/security/middleware.py`, `sangyan/api/app.py`):
+  1. Security Headers: Injects `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy: geolocation=(), camera=(), microphone=()`, and `Content-Security-Policy: default-src 'self'`.
+  2. Strict Cache-Control: Injects `Cache-Control: no-store, no-cache, must-revalidate` on all `/api/v1/*` routes to prevent client/proxy caching of sensitive evidence and investigation dossiers.
+  3. Hardened CORS: Eliminates `allow_origins=["*"]` when credentials are supported; requires explicitly configured allowed origins (`SANGYAN_ALLOWED_ORIGINS`).
+  4. Request body bounding: Enforces maximum request body size of 2 MB (`MAX_REQUEST_BODY_BYTES`) before parsing payload; returns HTTP 413 Payload Too Large on oversized inputs.
+  5. Payload limits: Enforces max 25 content items per batch, max 100,000 characters per content item, max 2048 characters per URL.
+- Why: Hardens the HTTP transport layer against standard web vulnerabilities and memory exhaustion attacks.
+- Alternatives considered: Relying solely on reverse-proxy headers (rejected: application must be secure-by-default even if deployed without an edge proxy).
+- Consequences: Defense-in-depth protection across all incoming and outgoing HTTP interactions.
+- Files: `sangyan/security/middleware.py`, `sangyan/api/app.py`
+
+---
+
+### D-050: Low-Cardinality Telemetry, Prometheus Metrics, Request Correlation & Structured Redacted Logging
+- Date / phase / commit: 2026-10-04, Phase 6
+- Context: Observability must monitor API performance, workflow lifecycles, and security events without leaking sensitive investor content, credentials, or creating high-cardinality memory leaks.
+- Decision: Implemented telemetry, Prometheus metrics exporter, and sensitive-data redaction (`sangyan/security/telemetry.py`):
+  1. Request correlation: Injects or propagates `X-Request-ID` across HTTP requests, workflow executions, and audit records.
+  2. Prometheus metrics at `/metrics`:
+     - `sangyan_http_requests_total(method, route, status_code)`
+     - `sangyan_http_request_duration_seconds(method, route)`
+     - `sangyan_security_events_total(event_type, status)`
+     - `sangyan_workflow_runs_total(status)`
+     - `sangyan_rate_limit_exceeded_total(endpoint_class)`
+     - `sangyan_pqc_trust_signatures_total(status)`
+  3. Strict cardinality bounding: Routes are normalized to route templates (e.g. `/api/v1/workflow/{id}/resume`). Explicitly forbids `user_id`, `investigation_id`, `claim_text`, or raw URLs in Prometheus labels.
+  4. Sensitive log redaction: Regex-based redaction filters redact Bearer tokens, API keys (`sgy_*`), passwords, OTPs, and private keys from all structured log output.
+  5. Chained audit ledger integration: Material security events (auth failure, tenant mismatch, key revocation) link into the tamper-evident SHA3-256 audit ledger.
+- Why: Provides complete operational visibility and auditability without exposing PII, secrets, or exploding monitoring system memory.
+- Alternatives considered: Logging full request bodies for debugging (rejected: leaks sensitive financial grievances and credentials into log aggregators).
+- Consequences: Production-ready observability compliant with privacy and security mandates.
+- Files: `sangyan/security/telemetry.py`, `sangyan/api/app.py`
+
+
 
 
 

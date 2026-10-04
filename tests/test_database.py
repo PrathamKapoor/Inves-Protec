@@ -57,10 +57,11 @@ class TestMigrations:
     def test_migration_runner_applies_tables(self, temp_db):
         runner = MigrationRunner(temp_db)
         applied = runner.migrate()
-        assert len(applied) == 3
+        assert len(applied) == 4
         assert "001_create_sangyan_core_tables" in applied[0]
         assert "002_create_sangyan_correlation_and_guidance_tables" in applied[1]
         assert "003_create_sangyan_workflow_runs_table" in applied[2]
+        assert "004_create_sangyan_api_keys_table" in applied[3]
 
         # Check that core tables exist
         content_table = temp_db.query_one(
@@ -82,6 +83,11 @@ class TestMigrations:
             "SELECT name FROM sqlite_master WHERE type='table' AND name='sangyan_workflow_runs'"
         )
         assert runs_table is not None
+
+        api_keys_table = temp_db.query_one(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sangyan_api_keys'"
+        )
+        assert api_keys_table is not None
 
         # Re-running migration must be idempotent (zero new migrations applied)
         second_run = runner.migrate()

@@ -25,6 +25,7 @@ from sangyan.domain.models import (
     Source,
     WorkflowRun,
 )
+from sangyan.security.models import ApiKey
 from sangyan.tenancy.models import SANGYAN_ROLES, has_permission
 
 
@@ -1389,5 +1390,134 @@ class TenantRepository:
             )
             for r in rows
         ]
+
+    # -----------------------------------------------------------------------
+    # API Keys
+    # -----------------------------------------------------------------------
+
+    def save_api_key(self, api_key: ApiKey) -> str:
+        self._require_permission("api_key:manage")
+        if api_key.organization_id != self.organization_id:
+            raise PermissionDeniedError("api key tenant does not match active organization")
+        self._db.execute(
+            """
+            INSERT INTO sangyan_api_keys
+            (id, organization_id, user_id, name, key_prefix, key_hash, role, scopes,
+             expires_at, revoked_at, last_used_at, created_at, schema_version)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                api_key.id,
+                api_key.organization_id,
+                api_key.user_id,
+                api_key.name,
+                api_key.key_prefix,
+                api_key.key_hash,
+                api_key.role,
+                json.dumps(api_key.scopes),
+                api_key.expires_at,
+                api_key.revoked_at,
+                api_key.last_used_at,
+                api_key.created_at,
+                api_key.schema_version,
+            ),
+        )
+        return api_key.id
+
+    def get_api_key(self, key_id: str) -> ApiKey:
+        self._require_permission("api_key:manage")
+        row = self._db.query_one(
+            "SELECT * FROM sangyan_api_keys WHERE id=? AND organization_id=?",
+            (key_id, self.organization_id),
+        )
+        if row is None:
+            raise NotFoundError(f"API key '{key_id}' not found in organization '{self.organization_id}'")
+        return ApiKey(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            user_id=row["user_id"],
+            name=row["name"],
+            key_prefix=row["key_prefix"],
+            key_hash=row["key_hash"],
+            role=row["role"],
+            scopes=json.loads(row["scopes"] or "[]"),
+            expires_at=row["expires_at"],
+            revoked_at=row["revoked_at"],
+            last_used_at=row["last_used_at"],
+            created_at=row["created_at"],
+            schema_version=int(row["schema_version"]),
+        )
+
+    def get_api_key_by_prefix(self, key_prefix: str) -> Optional[ApiKey]:
+        """Fetch API key by prefix scoped to current organization."""
+        row = self._db.query_one(
+            "SELECT * FROM sangyan_api_keys WHERE key_prefix=? AND organization_id=?",
+            (key_prefix, self.organization_id),
+        )
+        if row is None:
+            return None
+        return ApiKey(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            user_id=row["user_id"],
+            name=row["name"],
+            key_prefix=row["key_prefix"],
+            key_hash=row["key_hash"],
+            role=row["role"],
+            scopes=json.loads(row["scopes"] or "[]"),
+            expires_at=row["expires_at"],
+            revoked_at=row["revoked_at"],
+            last_used_at=row["last_used_at"],
+            created_at=row["created_at"],
+            schema_version=int(row["schema_version"]),
+        )
+
+    def list_api_keys(self, limit: int = 50, offset: int = 0) -> list[ApiKey]:
+        self._require_permission("api_key:manage")
+        rows = self._db.query_all(
+            """
+            SELECT * FROM sangyan_api_keys
+            WHERE organization_id=?
+            ORDER BY created_at DESC LIMIT ? OFFSET ?
+            """,
+            (self.organization_id, limit, offset),
+        )
+        return [
+            ApiKey(
+                id=r["id"],
+                organization_id=r["organization_id"],
+                user_id=r["user_id"],
+                name=r["name"],
+                key_prefix=r["key_prefix"],
+                key_hash=r["key_hash"],
+                role=r["role"],
+                scopes=json.loads(r["scopes"] or "[]"),
+                expires_at=r["expires_at"],
+                revoked_at=r["revoked_at"],
+                last_used_at=r["last_used_at"],
+                created_at=r["created_at"],
+                schema_version=int(r["schema_version"]),
+            )
+            for r in rows
+        ]
+
+    def revoke_api_key(self, key_id: str) -> ApiKey:
+        self._require_permission("api_key:manage")
+        key = self.get_api_key(key_id)
+        if key.revoked_at is None:
+            now = time.time()
+            self._db.execute(
+                "UPDATE sangyan_api_keys SET revoked_at=? WHERE id=? AND organization_id=?",
+                (now, key_id, self.organization_id),
+            )
+            key.revoked_at = now
+        return key
+
+    def update_api_key_last_used(self, key_id: str, timestamp: float) -> None:
+        self._db.execute(
+            "UPDATE sangyan_api_keys SET last_used_at=? WHERE id=? AND organization_id=?",
+            (timestamp, key_id, self.organization_id),
+        )
+
 
 
