@@ -579,6 +579,62 @@ Formally specified in `deploy/helm/sangyan/values.schema.json`:
 - `ingress`: TLS enabled, annotations for 2 MB max body size, and location configuration blocking `/metrics` (returns 404).
 - `networkPolicy`: `enabled: true`, strictly permits ingress from ingress-controller & Prometheus scraper; limits egress to DNS (53), HTTPS (443), and optional Postgres (5432).
 
+---
+
+## 11. Phase 8 Distributed Production Architecture & Resilience Models
+
+Phase 8 elevates SANGYAN from a single-replica system to a horizontally scalable distributed system with PostgreSQL connection pooling, LangGraph `PostgresSaver` checkpointing, Redis-backed atomic rate limiting and shared failed-auth lockout, offsite encrypted cloud backup replication, and OpenTelemetry distributed tracing.
+
+### 11.1 PostgreSQL Connection Pooling (`PostgresDatabaseEngine`)
+Located in `sangyan/database/postgres.py`, backed by `psycopg_pool.ConnectionPool`:
+- `min_size`: 2 connections
+- `max_size`: 20 connections
+- `timeout`: 10.0 seconds
+- `max_idle`: 300.0 seconds
+- `transaction()`: thread-local connection binding via `threading.local()`, ensuring multi-threaded safety and explicit `COMMIT` / `ROLLBACK`.
+- `execute()`: Returns integer rowcount (`cur.rowcount`) for atomic conditional transitions.
+- Advisory lock serialization for audit trail: `pg_advisory_xact_lock(918273)` ensures sequential hash chaining.
+
+### 11.2 Distributed Rate Limiter & Failed-Auth Models (`sangyan.security.redis_limiter`)
+- **`RedisRateLimiter`**:
+  * Distributed token bucket governed by atomic Redis Lua script (`LUA_TOKEN_BUCKET_SCRIPT`).
+  * Key namespace: `sangyan:ratelimit:{identifier}:{endpoint_class}`
+  * TTL calculation: `max(120, int(capacity / refill_rate * 2))`
+  * Failure modes: `fail_closed_mutations` (mutations rejected, reads allowed), `fail_open` (all allowed), `local_fallback` (transparent in-memory fallback).
+- **`RedisFailedAuthTracker`**:
+  * Sliding-window lockout backed by Redis sorted sets (`ZADD`, `ZREMRANGEBYSCORE`, `ZCARD`).
+  * Key namespace: `sangyan:authfail:{client_ip}`
+  * Cross-pod lockout: a client locked out on Pod A is immediately throttled across all API pods.
+
+### 11.3 Cloud Backup Replication Models (`sangyan.database.cloud_backup`)
+- **`CloudBackupManifest`**:
+  * `backup_id`: format `sangyan_bkp_YYYYMMDD_HHMMSS_ffffff_XXXXXX`
+  * `cloud_key`: S3 object key (e.g. `backups/sangyan_bkp_...tar.gz.enc`)
+  * `sha256`: SHA-256 checksum of the uploaded ciphertext
+  * `size_bytes`: length in bytes
+  * `encrypted`: boolean (must be `True`)
+  * `uploaded_at`: UTC timestamp
+  * `dialect`: relational database dialect
+- **Pre-Upload Encryption Invariant**:
+  * Unencrypted uploads (missing `.enc` suffix or `encrypted=False`) raise immediate `SecurityViolationError` / `ValueError`. Plaintext backups are strictly prohibited from touching cloud object stores.
+- **Remote Restore Isolation**:
+  * Remote archives downloaded to isolated tempdir, pre-verified against remote checksum, decrypted via AES-256-GCM, unpacked safely with path-traversal guards, and tested with `PRAGMA integrity_check`.
+
+### 11.4 Distributed Tracing & Privacy Guardrails (`sangyan.security.tracing`)
+- **`TracingMiddleware`**:
+  * Propagates W3C `traceparent` headers across HTTP hops.
+  * Sanitizes span attributes (`sanitize_span_attributes`): rejects raw message content, claims, auth tokens, passwords, and PII.
+  * Captures only low-cardinality metadata: `http.method`, `http.route`, `http.status_code`, `organization_id`, and `trace_id`.
+- **`NoOpTracer`**:
+  * Transparent zero-overhead fallback when `tracing_enabled = False`.
+
+### 11.5 Helm Multi-Replica Schema & Manifests
+- `deploy/helm/sangyan/values.schema.json`: `replicaCount` relaxed to `minimum: 1` (no upper bound constraint).
+- `deploy/helm/sangyan/values-distributed.yaml`: Multi-replica defaults (`replicaCount: 3`, `autoscaling.enabled: true`, `minReplicas: 2`, `maxReplicas: 10`, `targetCPUUtilizationPercentage: 75`).
+- `deploy/helm/sangyan/templates/hpa.yaml`: Kubernetes HorizontalPodAutoscaler template.
+- `deploy/helm/sangyan/templates/networkpolicy.yaml`: Added egress on port 6379 for Redis cluster access.
+- `docker-compose.distributed.yml`: Multi-replica cluster topology with `sangyan-api-1`, `sangyan-api-2`, `sangyan-postgres`, and `sangyan-redis`.
+
 
 
 

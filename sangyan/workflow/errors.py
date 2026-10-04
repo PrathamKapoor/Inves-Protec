@@ -1,7 +1,7 @@
 """Workflow and orchestration exceptions for SANGYAN."""
 from __future__ import annotations
 
-from sangyan.core.errors import PermissionDeniedError, SangyanError
+from sangyan.core.errors import InvalidStateTransitionError, PermissionDeniedError, SangyanError
 
 
 class WorkflowError(SangyanError):
@@ -11,7 +11,7 @@ class WorkflowError(SangyanError):
         super().__init__(message, code=code, status_code=status_code)
 
 
-class ReviewConflictError(WorkflowError):
+class ReviewConflictError(InvalidStateTransitionError, WorkflowError):
     """Raised when concurrent review submissions conflict or review has already been finalized."""
 
     def __init__(self, message: str = "Investigation review already resolved or in conflicting state.") -> None:

@@ -62,8 +62,16 @@ class CryptoError(SangyanError):
         super().__init__(message, code="CRYPTO_ERROR", status_code=500)
 
 
-class SecurityViolationError(SangyanError):
+class SecurityViolationError(SangyanError, ValueError):
     """Raised when a security control (such as SSRF or rate limit) is triggered."""
 
     def __init__(self, message: str, code: str = "SECURITY_VIOLATION", status_code: int = 400) -> None:
         super().__init__(message, code=code, status_code=status_code)
+
+
+class InvalidStateTransitionError(SangyanError):
+    """Raised when an entity state transition is invalid or rejected due to concurrent mutation."""
+
+    def __init__(self, message: str, code: str = "INVALID_STATE_TRANSITION", status_code: int = 409) -> None:
+        super().__init__(message, code=code, status_code=status_code)
+

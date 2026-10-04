@@ -192,52 +192,65 @@ class WorkflowService:
         # Check tenant permissions: caller must have 'investigation:review'
         repo._require_permission("investigation:review")
 
-        # Concurrency control per investigation
-        inv_lock = self._get_inv_lock(investigation_id)
-        with inv_lock:
-            # Retrieve investigation and verify tenant ownership
-            inv = repo.get_investigation(investigation_id)
-            if inv.organization_id != organization_id:
-                raise TenantMismatchError(
-                    f"Investigation '{investigation_id}' belongs to organization '{inv.organization_id}', "
-                    f"not caller '{organization_id}'."
-                )
+        # Retrieve investigation and verify tenant ownership
+        inv = repo.get_investigation(investigation_id)
+        if inv.organization_id != organization_id:
+            raise TenantMismatchError(
+                f"Investigation '{investigation_id}' belongs to organization '{inv.organization_id}', "
+                f"not caller '{organization_id}'."
+            )
 
-            # Check status
-            if inv.status == "CANCELLED":
+        # Pre-flight status check
+        if inv.status == "CANCELLED":
+            raise InvestigationCancelledError(f"Cannot resume cancelled investigation '{investigation_id}'.")
+        if inv.status != "AWAITING_REVIEW":
+            raise ReviewConflictError(
+                f"Investigation '{investigation_id}' is in status '{inv.status}', not 'AWAITING_REVIEW'."
+            )
+
+        # Retrieve active WorkflowRun
+        wf_run = repo.get_workflow_run_by_investigation(investigation_id)
+        if wf_run is None:
+            raise NotFoundError(f"Active workflow run for investigation '{investigation_id}' not found.")
+
+        validate_thread_access(wf_run.thread_id, organization_id)
+
+        # Atomic conditional database state transition (AWAITING_REVIEW -> FINALIZING)
+        # Governed at the database layer to guarantee mutual exclusion across multiple pods/workers
+        transitioned = repo.transition_investigation_status(
+            investigation_id,
+            from_status="AWAITING_REVIEW",
+            to_status="FINALIZING",
+        )
+        if not transitioned:
+            current_inv = repo.get_investigation(investigation_id)
+            if current_inv.status == "CANCELLED":
                 raise InvestigationCancelledError(f"Cannot resume cancelled investigation '{investigation_id}'.")
-            if inv.status != "AWAITING_REVIEW":
-                raise ReviewConflictError(
-                    f"Investigation '{investigation_id}' is in status '{inv.status}', not 'AWAITING_REVIEW'."
-                )
+            raise ReviewConflictError(
+                f"Investigation '{investigation_id}' was already transitioned out of AWAITING_REVIEW "
+                f"(current status: '{current_inv.status}')."
+            )
 
-            # Retrieve active WorkflowRun
-            wf_run = repo.get_workflow_run_by_investigation(investigation_id)
-            if wf_run is None:
-                raise NotFoundError(f"Active workflow run for investigation '{investigation_id}' not found.")
+        review_decision = {
+            "reviewer_id": user_id,
+            "action": review_action,
+            "reason": reason or f"Reviewed with action {review_action}",
+            "finding_id": finding_id,
+            "occurred_at": time.time(),
+        }
 
-            validate_thread_access(wf_run.thread_id, organization_id)
+        # Update WorkflowRun status
+        repo.update_workflow_run(wf_run.id, status="RUNNING", current_node="review_gate_node")
 
-            review_decision = {
-                "reviewer_id": user_id,
-                "action": review_action,
-                "reason": reason or f"Reviewed with action {review_action}",
-                "finding_id": finding_id,
-                "occurred_at": time.time(),
-            }
+        # Resume execution in LangGraph
+        res = self.workflow.invoke(Command(resume=review_decision), thread_id=wf_run.thread_id)
 
-            # Resume execution in LangGraph
-            repo.update_investigation(investigation_id, status="FINALIZING")
-            repo.update_workflow_run(wf_run.id, status="RUNNING", current_node="review_gate_node")
+        if res.get("status") == "COMPLETED":
+            repo.update_workflow_run(wf_run.id, status="COMPLETED", current_node="completion_node")
+        elif res.get("status") == "FAILED":
+            repo.update_workflow_run(wf_run.id, status="FAILED", current_node="failure_node")
 
-            res = self.workflow.invoke(Command(resume=review_decision), thread_id=wf_run.thread_id)
-
-            if res.get("status") == "COMPLETED":
-                repo.update_workflow_run(wf_run.id, status="COMPLETED", current_node="completion_node")
-            elif res.get("status") == "FAILED":
-                repo.update_workflow_run(wf_run.id, status="FAILED", current_node="failure_node")
-
-            return res
+        return res
 
     # -----------------------------------------------------------------------
     # 3. Cancel Investigation
@@ -253,36 +266,45 @@ class WorkflowService:
         repo = self._get_repo(organization_id, user_id)
         repo._require_permission("investigation:create")
 
-        inv_lock = self._get_inv_lock(investigation_id)
-        with inv_lock:
-            inv = repo.get_investigation(investigation_id)
-            if inv.organization_id != organization_id:
-                raise TenantMismatchError("Cannot cancel investigation from another tenant.")
+        inv = repo.get_investigation(investigation_id)
+        if inv.organization_id != organization_id:
+            raise TenantMismatchError("Cannot cancel investigation from another tenant.")
 
-            if inv.status == "COMPLETED":
+        if inv.status == "COMPLETED":
+            raise CannotCancelCompletedInvestigationError(
+                f"Investigation '{investigation_id}' is already COMPLETED and cannot be cancelled."
+            )
+        if inv.status == "CANCELLED":
+            return inv
+
+        cancel_summary = f"Cancelled by user {user_id}. Reason: {reason or 'No reason provided'}"
+        transitioned = repo.transition_investigation_status(
+            investigation_id,
+            from_status=inv.status,
+            to_status="CANCELLED",
+            summary=cancel_summary,
+        )
+        if not transitioned:
+            fresh = repo.get_investigation(investigation_id)
+            if fresh.status == "COMPLETED":
                 raise CannotCancelCompletedInvestigationError(
                     f"Investigation '{investigation_id}' is already COMPLETED and cannot be cancelled."
                 )
+            if fresh.status == "CANCELLED":
+                return fresh
 
-            now = time.time()
-            repo.update_investigation(
-                investigation_id,
-                status="CANCELLED",
-                summary=f"Cancelled by user {user_id}. Reason: {reason or 'No reason provided'}",
-            )
+        wf_run = repo.get_workflow_run_by_investigation(investigation_id)
+        if wf_run is not None:
+            repo.update_workflow_run(wf_run.id, status="CANCELLED")
 
-            wf_run = repo.get_workflow_run_by_investigation(investigation_id)
-            if wf_run is not None:
-                repo.update_workflow_run(wf_run.id, status="CANCELLED")
+        repo.record_audit_event(
+            action="workflow_cancelled",
+            resource=f"investigation:{investigation_id}",
+            result="CANCELLED",
+            metadata={"user_id": user_id, "reason": reason},
+        )
 
-            repo.record_audit_event(
-                action="workflow_cancelled",
-                resource=f"investigation:{investigation_id}",
-                result="CANCELLED",
-                metadata={"user_id": user_id, "reason": reason},
-            )
-
-            return repo.get_investigation(investigation_id)
+        return repo.get_investigation(investigation_id)
 
     # -----------------------------------------------------------------------
     # 4. State & Run Query Inspection

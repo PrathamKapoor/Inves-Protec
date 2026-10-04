@@ -7,8 +7,7 @@
     "replicaCount": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 1,
-      "description": "Replica count enforced to 1 due to in-process state isolation and SQLite WAL checkpointer."
+      "description": "Replica count for horizontal scaling (minimum 1, distributed multi-replica supported with PostgreSQL and Redis)."
     },
     "image": {
       "type": "object",

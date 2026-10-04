@@ -1,0 +1,166 @@
+# ===========================================================================
+# SANGYAN Distributed Production Compose Topology (Phase 8)
+# Multi-replica API (api-1, api-2) backed by PostgreSQL & Redis
+# Proves cluster-wide rate limiting, concurrent reviews, and distributed checkpoints
+# ===========================================================================
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: sangyan-postgres
+    environment:
+      POSTGRES_USER: sangyan
+      POSTGRES_PASSWORD: sangyan_secret_password
+      POSTGRES_DB: sangyan
+    ports:
+      - "5432:5432"
+    volumes:
+      - sangyan-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sangyan -d sangyan"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: sangyan-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - sangyan-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  sangyan-migration:
+    image: sangyan:0.7.0
+    container_name: sangyan-dist-migration
+    user: "10001:10001"
+    command: ["migrate"]
+    environment:
+      - SANGYAN_ENV=production
+      - SANGYAN_DATABASE_URL=postgresql://sangyan:sangyan_secret_password@postgres:5432/sangyan
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  sangyan-api-1:
+    image: sangyan:0.7.0
+    container_name: sangyan-api-1
+    user: "10001:10001"
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    ports:
+      - "8001:8000"
+    environment:
+      - SANGYAN_ENV=production
+      - SANGYAN_DATABASE_URL=postgresql://sangyan:sangyan_secret_password@postgres:5432/sangyan
+      - SANGYAN_CHECKPOINT_BACKEND=postgres
+      - SANGYAN_REDIS_URL=redis://redis:6379/0
+      - SANGYAN_REDIS_FAILURE_MODE=fail_closed_mutations
+      - SANGYAN_TRACING_ENABLED=true
+      - SANGYAN_KEY_DIR=/app/keys
+      - SANGYAN_BACKUP_DIR=/app/backups
+      - SANGYAN_JWT_SECRET=${SANGYAN_JWT_SECRET:-sangyan_distributed_demo_jwt_secret_32_bytes}
+      - SANGYAN_REQUIRE_AUTH=${SANGYAN_REQUIRE_AUTH:-true}
+      - SANGYAN_ALLOWED_ORIGINS=*
+      - SANGYAN_LOG_LEVEL=INFO
+      - SANGYAN_RATE_LIMIT_ENABLED=true
+      - SANGYAN_AUTO_MIGRATE=false
+    volumes:
+      - sangyan-keys:/app/keys
+      - sangyan-backups:/app/backups
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      sangyan-migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sangyan-api-2:
+    image: sangyan:0.7.0
+    container_name: sangyan-api-2
+    user: "10001:10001"
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    ports:
+      - "8002:8000"
+    environment:
+      - SANGYAN_ENV=production
+      - SANGYAN_DATABASE_URL=postgresql://sangyan:sangyan_secret_password@postgres:5432/sangyan
+      - SANGYAN_CHECKPOINT_BACKEND=postgres
+      - SANGYAN_REDIS_URL=redis://redis:6379/0
+      - SANGYAN_REDIS_FAILURE_MODE=fail_closed_mutations
+      - SANGYAN_TRACING_ENABLED=true
+      - SANGYAN_KEY_DIR=/app/keys
+      - SANGYAN_BACKUP_DIR=/app/backups
+      - SANGYAN_JWT_SECRET=${SANGYAN_JWT_SECRET:-sangyan_distributed_demo_jwt_secret_32_bytes}
+      - SANGYAN_REQUIRE_AUTH=${SANGYAN_REQUIRE_AUTH:-true}
+      - SANGYAN_ALLOWED_ORIGINS=*
+      - SANGYAN_LOG_LEVEL=INFO
+      - SANGYAN_RATE_LIMIT_ENABLED=true
+      - SANGYAN_AUTO_MIGRATE=false
+    volumes:
+      - sangyan-keys:/app/keys
+      - sangyan-backups:/app/backups
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      sangyan-migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  sangyan-backup:
+    image: sangyan:0.7.0
+    container_name: sangyan-dist-backup
+    user: "10001:10001"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "Starting SANGYAN distributed backup routine..."
+        while true; do
+          python -m sangyan.cli backup create --encrypt --output-dir /app/backups || echo "Backup failed!"
+          python -m sangyan.cli backup prune --backup-dir /app/backups --keep 7 || echo "Pruning failed!"
+          sleep 86400
+        done
+    environment:
+      - SANGYAN_ENV=production
+      - SANGYAN_DATABASE_URL=postgresql://sangyan:sangyan_secret_password@postgres:5432/sangyan
+      - SANGYAN_KEY_DIR=/app/keys
+      - SANGYAN_BACKUP_DIR=/app/backups
+      - SANGYAN_BACKUP_ENCRYPTION_KEY=${SANGYAN_BACKUP_ENCRYPTION_KEY:- sangyan_32_byte_backup_enc_key}
+    volumes:
+      - sangyan-keys:/app/keys:ro
+      - sangyan-backups:/app/backups
+    depends_on:
+      sangyan-api-1:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sangyan-pgdata:
+    name: sangyan-pgdata
+  sangyan-redisdata:
+    name: sangyan-redisdata
+  sangyan-keys:
+    name: sangyan-keys
+  sangyan-backups:
+    name: sangyan-backups

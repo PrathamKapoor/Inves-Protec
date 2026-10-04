@@ -65,7 +65,18 @@ def create_app(
 
     sec_config = security_config or app_config.to_security_config()
     metrics = metrics_registry or MetricsRegistry.get_default()
-    limiter = rate_limiter or TokenBucketRateLimiter()
+
+    # Rate Limiter: Redis-backed distributed limiter if configured, else process-local token bucket
+    if rate_limiter is not None:
+        limiter = rate_limiter
+    elif app_config.redis_url:
+        from sangyan.security.redis_limiter import RedisRateLimiter
+        limiter = RedisRateLimiter(
+            redis_url=app_config.redis_url,
+            failure_mode=app_config.redis_failure_mode,
+        )
+    else:
+        limiter = TokenBucketRateLimiter()
 
     # Database Engine initialization
     if engine is not None:
@@ -106,12 +117,18 @@ def create_app(
         repository_factory=lambda oid, user_id=None: TenantRepository(db_engine, organization_id=oid, user_id=user_id or "system"),
     )
 
-    # Durable checkpointer setup
+    # Durable checkpointer setup (PostgresSaver in distributed mode, SqliteSaver in single-instance)
     wf_checkpointer: Optional[WorkflowCheckpointer] = None
     if workflow_service is not None:
         wf_service = workflow_service
     else:
-        if app_config.checkpoint_db_path:
+        if (
+            app_config.checkpoint_backend == "postgres"
+            and app_config.database_url
+            and app_config.database_url.startswith(("postgresql://", "postgres://"))
+        ):
+            wf_checkpointer = WorkflowCheckpointer(postgres_url=app_config.database_url)
+        elif app_config.checkpoint_db_path:
             wf_checkpointer = WorkflowCheckpointer(db_path=app_config.checkpoint_db_path)
         else:
             wf_checkpointer = WorkflowCheckpointer(in_memory=True)
@@ -174,8 +191,16 @@ def create_app(
     # 4. Defensive HTTP security headers
     app.add_middleware(SecurityHeadersMiddleware)
 
-    # 5. Distributed trace correlation
+    # 5. Distributed trace correlation & OpenTelemetry spans
     app.add_middleware(CorrelationIdMiddleware)
+    from sangyan.security.tracing import TracingMiddleware, setup_tracer
+    if app_config.tracing_enabled:
+        setup_tracer(
+            service_name="sangyan-api",
+            sample_rate=app_config.trace_sample_rate,
+            exporter_endpoint=app_config.otlp_endpoint,
+        )
+    app.add_middleware(TracingMiddleware)
 
     # 6. Hardened CORS configuration
     allow_credentials = False if sec_config.allowed_origins == ["*"] else True
@@ -236,11 +261,28 @@ def create_app(
                     media_type="application/json",
                 )
 
-            return {
+            res_data = {
                 "status": "ready",
                 "database": "connected",
                 "migrations": "current",
             }
+
+            # Check Redis readiness if Redis-backed rate limiter is active
+            if hasattr(limiter, "ping"):
+                redis_ok = limiter.ping()
+                if not redis_ok:
+                    if getattr(limiter, "failure_mode", "") == "fail_closed_mutations":
+                        return Response(
+                            content=json.dumps({"status": "not_ready", "reason": "redis_unavailable"}),
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            media_type="application/json",
+                        )
+                    else:
+                        res_data["redis"] = "degraded_fallback"
+                else:
+                    res_data["redis"] = "connected"
+
+            return res_data
         except Exception as exc:
             return Response(
                 content=json.dumps({"status": "not_ready", "reason": "database_unavailable"}),

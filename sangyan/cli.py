@@ -216,6 +216,84 @@ def backup_prune(backup_dir: Optional[str], keep: int):
         click.echo(click.style(f"No backups pruned (retention count: {keep}).", fg="cyan"))
 
 
+@backup_group.command("upload")
+@click.argument("backup_path", type=click.Path(exists=True))
+@click.option("--bucket", default=None, help="S3 bucket or destination container")
+@click.option("--prefix", default="backups/sangyan", help="Cloud object key prefix")
+def backup_upload(backup_path: str, bucket: Optional[str], prefix: str):
+    """Replicate an encrypted backup archive to cloud storage."""
+    config = load_config()
+    b_bucket = bucket or config.backup_s3_bucket
+    if not b_bucket:
+        click.echo(
+            click.style(
+                "Error: S3 bucket not specified (pass --bucket or set SANGYAN_BACKUP_S3_BUCKET)",
+                fg="red",
+            ),
+            err=True,
+        )
+        sys.exit(1)
+
+    from sangyan.database.cloud_backup import S3BackupStorage
+
+    storage = S3BackupStorage(bucket=b_bucket, prefix=prefix, region=config.backup_s3_region)
+    click.echo(f"Replicating backup {backup_path} to s3://{b_bucket}/{prefix}...")
+    try:
+        manifest = storage.upload_backup(backup_path)
+        click.echo(click.style("Cloud backup replication SUCCESSFUL:", fg="green"))
+        click.echo(f"  Cloud Key:   {manifest.cloud_key}")
+        click.echo(f"  SHA-256:     {manifest.sha256}")
+        click.echo(f"  Size Bytes:  {manifest.size_bytes}")
+        click.echo(f"  Encrypted:   {manifest.encrypted}")
+    except Exception as e:
+        click.echo(click.style(f"Cloud replication FAILED: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+
+@backup_group.command("restore-cloud")
+@click.argument("cloud_key")
+@click.option("--target-dir", required=True, type=click.Path(), help="Target directory for restored artifacts")
+@click.option("--key", default=None, help="Decryption key for archive")
+@click.option("--bucket", default=None, help="S3 bucket")
+def backup_restore_cloud(cloud_key: str, target_dir: str, key: Optional[str], bucket: Optional[str]):
+    """Download encrypted cloud backup, verify checksum, and restore into isolated directory."""
+    config = load_config()
+    b_bucket = bucket or config.backup_s3_bucket
+    if not b_bucket:
+        click.echo(
+            click.style(
+                "Error: S3 bucket not specified (pass --bucket or set SANGYAN_BACKUP_S3_BUCKET)",
+                fg="red",
+            ),
+            err=True,
+        )
+        sys.exit(1)
+
+    from sangyan.database.cloud_backup import S3BackupStorage
+
+    storage = S3BackupStorage(bucket=b_bucket, region=config.backup_s3_region)
+    engine = create_engine(config.database_url)
+    enc_key = key or config.backup_encryption_key
+    manager = BackupManager(engine=engine)
+
+    click.echo(f"Restoring cloud backup s3://{b_bucket}/{cloud_key} to {target_dir}...")
+    try:
+        res = storage.restore_from_cloud(
+            cloud_key=cloud_key,
+            target_dir=target_dir,
+            backup_manager=manager,
+            encryption_key=enc_key,
+        )
+        click.echo(click.style("Cloud restore completed successfully:", fg="green"))
+        click.echo(f"  Target Dir:          {res['target_dir']}")
+        click.echo(f"  Restored Relational: {res['restored_relational']}")
+        click.echo(f"  Restored Checkpoints:{res['restored_checkpoints']}")
+        click.echo(f"  Table Count:         {res['table_count']}")
+    except Exception as e:
+        click.echo(click.style(f"Cloud restore failed: {e}", fg="red"), err=True)
+        sys.exit(1)
+
+
 @cli.command("health")
 @click.option("--url", default="http://127.0.0.1:8000", help="Base URL of SANGYAN service")
 def health_cmd(url: str):

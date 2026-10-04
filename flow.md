@@ -464,6 +464,92 @@ Isolated Disaster Recovery Verification:
 
 ---
 
+## 12. Distributed Runtime Architecture, Checkpoint Durability, Redis Rate Limiting & Cloud Resilience Flow
+
+```text
+Multi-Replica Kubernetes Ingress / Cluster Traffic
+                   ↓
+   +---------------+---------------+
+   |               |               |
+[Pod A (API)]   [Pod B (API)]   [Pod N (API)]
+   |               |               |
+   +-------+-------+-------+-------+
+           |               |
+           ↓               ↓
+   [Redis Cluster]   [PostgreSQL Pool]
+   - Token Bucket     - Relational DB
+   - Auth Throttle    - PostgresSaver
+                      - Advisory Locks
+```
+
+1. Distributed Rate Limiting & Cluster-Wide Failed-Auth Throttling:
+  └─ RateLimiterMiddleware.dispatch()                     sangyan/security/middleware.py
+      ├─ 1. Identify client: principal ID or IP           identifier = f"principal:{p.id}" or f"ip:{host}"
+      ├─ 2. RedisFailedAuthTracker.is_throttled()         sangyan/security/redis_limiter.py
+      │   ├─ ZREMRANGEBYSCORE sangyan:authfail:<ip>       prune failures older than sliding window
+      │   ├─ ZCARD key                                    count active failures
+      │   └─ if count >= threshold: return 429           cluster-wide lockout across all API pods
+      ├─ 3. RedisRateLimiter.check_rate_limit()           sangyan/security/redis_limiter.py
+      │   └─ EVALSHA LUA_TOKEN_BUCKET_SCRIPT              atomic token replenishment & deduction
+      │       ├─ capacity, refill_rate, now, requested
+      │       ├─ tokens = min(cap, tokens + elapsed*rate)
+      │       ├─ if tokens >= requested: decrement & allow (200)
+      │       └─ else: calculate retry_after & reject (429)
+      └─ Failure Mode Resilience:
+          ├─ fail_closed_mutations: mutations fail 429/503; reads fail open
+          ├─ fail_open: allow all requests on Redis failure
+          └─ local_fallback: transparent in-memory TokenBucket fallback
+
+2. PostgreSQL Connection Pooling & Thread-Local Transaction Isolation:
+  └─ PostgresDatabaseEngine                               sangyan/database/postgres.py
+      ├─ psycopg_pool.ConnectionPool(min_size=2, max_size=20)
+      ├─ thread-local connection binding in transaction()
+      ├─ autocommit=False with BEGIN / COMMIT / ROLLBACK guarantees
+      └─ execute() returns affected rowcount (cur.rowcount)
+
+3. Workflow Checkpoint Durability (PostgresSaver):
+  └─ WorkflowCheckpointer(backend="postgres")             sangyan/workflow/checkpointer.py
+      ├─ PostgresSaver(sync_connection)
+      ├─ saver.setup() idempotently provisions checkpoints schema
+      └─ thread_id: `<org_id>:<investigation_id>:<run_id>` prevents cross-tenant access
+
+4. Review Concurrency & Database-Level Mutex:
+  └─ WorkflowService.resume_investigation()               sangyan/workflow/service.py
+      ├─ TenantRepository.transition_investigation_status()
+      │   └─ UPDATE sangyan_investigations
+      │      SET status = 'FINALIZING'
+      │      WHERE id = ? AND status = 'AWAITING_REVIEW'
+      ├─ If rowcount == 1: winning pod claims review, invokes workflow runner
+      └─ If rowcount == 0: losing pod raises ReviewConflictError (409 Conflict)
+
+5. Chained Audit Ledger Advisory Locking:
+  └─ TenantRepository.record_audit_event()                sangyan/tenancy/repository.py
+      ├─ pg_advisory_xact_lock(918273) serializes audit chain writes per-tenant
+      ├─ SELECT prev_hash FROM sangyan_audit_ledger ORDER BY sequence_number DESC LIMIT 1
+      ├─ compute entry_hash = SHA3_256(prev_hash + tenant_id + payload)
+      └─ INSERT INTO sangyan_audit_ledger (entry_hash, prev_hash, seq)
+
+6. Offsite Cloud Backup Replication & Remote Restore:
+  └─ BackupManager + S3BackupStorage                      sangyan/database/cloud_backup.py
+      ├─ 1. Local backup creation: VACUUM snapshot + tarball
+      ├─ 2. Pre-upload encryption enforcement: requires AES-256-GCM (.enc extension)
+      ├─ 3. S3 upload with exponential backoff & jitter (max_retries=3)
+      ├─ 4. SHA-256 integrity verification against remote object
+      ├─ 5. Download remote archive into isolated temporary directory
+      ├─ 6. Authenticated decryption, SHA-256 match, and safe tarball extraction
+      ├─ 7. PRAGMA integrity_check on restored relational & checkpoint databases
+      └─ 8. Remote retention pruning: keep newest N, never prune latest verified backup
+
+7. OpenTelemetry Distributed Tracing & Privacy Guardrails:
+  └─ TracingMiddleware + trace_span                       sangyan/security/tracing.py
+      ├─ Propagate W3C traceparent headers across distributed boundaries
+      ├─ Sanitize span attributes: reject raw claims, message bodies, tokens, and PII
+      ├─ Record low-cardinality metadata: status_code, http.route, organization_id
+      └─ Fallback to NoOpTracer when tracing is disabled
+```
+
+---
+
 ## Session Changelog
 
 | Area | Change | Files | Commit | Decision |
@@ -537,6 +623,15 @@ Isolated Disaster Recovery Verification:
 | Cryptographic Backup & Safe Restore | Online VACUUM snapshot, AES-256-GCM + PBKDF2 encryption, SHA-256 manifest, traversal-safe restore | `sangyan/database/backup.py`, `sangyan/cli.py` | a7b6504 | D-057 |
 | Production Kubernetes & Helm Deployment | Helm chart with non-root securityContext, Ingress TLS, NetworkPolicy, Job, and CronJob | `deploy/helm/sangyan/` | a7b6504 | D-058 |
 | Phase 7 Verification Suite | 28 new tests covering config, health, backups, migrations, container and k8s manifests (total 205 tests) | `tests/test_*.py` | a7b6504 | D-051..D-058 |
+| Distributed Relational Engine | PostgreSQL connection pooling with psycopg_pool, thread-local transactions, and rowcount reporting | `sangyan/database/postgres.py`, `sangyan/database/engine.py` | pending | D-059 |
+| Durable Workflow Checkpointing | PostgresSaver checkpointer with pooled connections, schema initialization, and tenant thread isolation | `sangyan/workflow/checkpointer.py` | pending | D-060 |
+| Distributed Rate Limiting | Atomic Redis token bucket via Lua script and shared sliding-window failed-auth lockout across pods | `sangyan/security/redis_limiter.py`, `sangyan/security/middleware.py` | pending | D-061 |
+| Review Race Concurrency | Database-level atomic conditional transition (AWAITING_REVIEW -> FINALIZING) preventing double-finalization | `sangyan/tenancy/repository.py`, `sangyan/workflow/service.py` | pending | D-062 |
+| Chained Audit Serialization | PostgreSQL advisory transaction locking (pg_advisory_xact_lock) for unbroken cryptographic hash chains | `sangyan/tenancy/repository.py` | pending | D-063 |
+| Cloud Backup Replication | S3/GCS-compatible offsite replication with strict pre-upload encryption enforcement (.enc) and isolated restore | `sangyan/database/cloud_backup.py`, `sangyan/cli.py` | pending | D-064 |
+| OpenTelemetry Distributed Tracing | W3C trace propagation with privacy boundary rejecting raw claims, tokens, and PII from span attributes | `sangyan/security/tracing.py`, `sangyan/api/app.py` | pending | D-065 |
+| Distributed Topology & Scaling | Multi-replica Helm values, HPA, NetworkPolicy with Redis egress, and distributed docker-compose | `deploy/helm/sangyan/`, `docker-compose.distributed.yml` | pending | D-066 |
+| Phase 8 Distributed Test Suite | 34 comprehensive tests across 15 scenarios covering concurrency, cloud backup, tracing, Redis, and Postgres (total 239 tests) | `tests/test_*.py` | pending | D-059..D-066 |
 
 
 

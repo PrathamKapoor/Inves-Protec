@@ -64,6 +64,21 @@ class SangyanConfig:
     backup_dir: str = "backups"
     backup_encryption_key: Optional[str] = None
     backup_retention_count: int = 7
+    backup_storage_provider: str = "local"  # local | s3
+    backup_s3_bucket: Optional[str] = None
+    backup_s3_endpoint_url: Optional[str] = None
+    backup_s3_region: str = "ap-south-1"
+    backup_s3_prefix: str = "backups"
+
+    # Distributed Architecture & Controls (Phase 8)
+    redis_url: Optional[str] = None
+    redis_failure_mode: str = "fail_closed_mutations"  # fail_closed_mutations | fail_open | local_fallback
+    checkpoint_backend: Optional[str] = None  # auto | postgres | sqlite
+
+    # Distributed Tracing & Observability (Phase 8)
+    tracing_enabled: bool = False
+    otel_exporter_endpoint: Optional[str] = None
+    trace_sample_rate: float = 1.0
 
     # Server execution
     host: str = "0.0.0.0"
@@ -96,6 +111,12 @@ class SangyanConfig:
             "env": self.env,
             "database_url": self._sanitize_db_url(self.database_url),
             "checkpoint_db_path": self.checkpoint_db_path,
+            "checkpoint_backend": self.checkpoint_backend,
+            "redis_url": self._sanitize_db_url(self.redis_url) if self.redis_url else None,
+            "redis_failure_mode": self.redis_failure_mode,
+            "backup_storage_provider": self.backup_storage_provider,
+            "backup_s3_bucket": self.backup_s3_bucket,
+            "tracing_enabled": self.tracing_enabled,
             "key_dir": self.key_dir,
             "jwt_secret": "[REDACTED]" if self.jwt_secret else None,
             "jwt_public_key": "[SET]" if self.jwt_public_key else None,
@@ -169,6 +190,13 @@ def load_config(env_source: Optional[Mapping[str, str]] = None) -> SangyanConfig
     except ValueError:
         backup_retention = 7
 
+    # Phase 8 Distributed & Cloud configs
+    raw_sample_rate = env.get("SANGYAN_TRACE_SAMPLE_RATE", "1.0")
+    try:
+        trace_sample_rate = float(raw_sample_rate)
+    except ValueError:
+        trace_sample_rate = 1.0
+
     cfg = SangyanConfig(
         env=raw_env,
         database_url=db_url,
@@ -190,6 +218,17 @@ def load_config(env_source: Optional[Mapping[str, str]] = None) -> SangyanConfig
         backup_dir=env.get("SANGYAN_BACKUP_DIR", "backups"),
         backup_encryption_key=env.get("SANGYAN_BACKUP_ENCRYPTION_KEY"),
         backup_retention_count=backup_retention,
+        backup_storage_provider=env.get("SANGYAN_BACKUP_STORAGE_PROVIDER", "local"),
+        backup_s3_bucket=env.get("SANGYAN_BACKUP_S3_BUCKET"),
+        backup_s3_endpoint_url=env.get("SANGYAN_BACKUP_S3_ENDPOINT_URL"),
+        backup_s3_region=env.get("SANGYAN_BACKUP_S3_REGION", "ap-south-1"),
+        backup_s3_prefix=env.get("SANGYAN_BACKUP_S3_PREFIX", "backups"),
+        redis_url=env.get("SANGYAN_REDIS_URL"),
+        redis_failure_mode=env.get("SANGYAN_REDIS_FAILURE_MODE", "fail_closed_mutations"),
+        checkpoint_backend=env.get("SANGYAN_CHECKPOINT_BACKEND"),
+        tracing_enabled=_str_to_bool(env.get("SANGYAN_TRACING_ENABLED"), default=False),
+        otel_exporter_endpoint=env.get("SANGYAN_OTEL_EXPORTER_ENDPOINT"),
+        trace_sample_rate=trace_sample_rate,
         host=env.get("SANGYAN_HOST", "0.0.0.0"),
         port=port,
         log_level=env.get("SANGYAN_LOG_LEVEL", "INFO").upper(),

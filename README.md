@@ -169,18 +169,42 @@ docker compose logs -f sangyan-api
 
 ---
 
+### Distributed Production Deployment (Multi-Replica Scaling)
+
+Phase 8 enables horizontal scaling across multiple API replicas backed by PostgreSQL connection pooling and a Redis cluster.
+
+#### Multi-Replica Docker Compose:
+```bash
+# Start distributed topology (2 API pods, PostgreSQL, Redis, migration job, backup worker)
+docker compose -f docker-compose.distributed.yml up -d
+
+# Verify cluster status
+docker compose -f docker-compose.distributed.yml ps
+```
+
+#### Multi-Replica Helm Deployment:
+```bash
+# Deploy with distributed values (3 replicas, HPA 2-10, PostgresSaver, Redis rate limiting)
+helm upgrade --install sangyan deploy/helm/sangyan \
+  --namespace sangyan \
+  -f deploy/helm/sangyan/values.yaml \
+  -f deploy/helm/sangyan/values-distributed.yaml
+```
+
+---
+
 ### Kubernetes & Helm Deployment
 
 The production Helm chart is located in `deploy/helm/sangyan/`.
 
 #### Chart Highlights:
-- **Single Replica**: Enforces `replicaCount: 1`.
+- **Horizontal Scaling & HPA**: Supports `replicaCount >= 2` and automated scaling (`hpa.yaml`) between 2 and 10 replicas.
 - **Pod Security**: `runAsNonRoot: true`, `runAsUser: 10001`, `runAsGroup: 10001`, `seccompProfile.type: RuntimeDefault`.
 - **Container Security**: `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: ["ALL"]`.
 - **Pre-Rollout Migration Hook**: `Job` template (`job-migration.yaml`) runs `sangyan.cli migrate` as a Helm pre-install / pre-upgrade hook.
 - **Backup CronJob**: `CronJob` template (`cronjob-backup.yaml`) runs daily at 02:00 UTC with automated AES-256-GCM encryption.
 - **Ingress Hardening**: Enforces TLS, sets `client_max_body_size 2m`, and returns HTTP 404 for `/metrics` requests from outside the cluster.
-- **NetworkPolicy**: Restricts ingress to the Ingress controller and Prometheus scraper; restricts egress to DNS (53), HTTPS (443), and optional PostgreSQL (5432).
+- **NetworkPolicy**: Restricts ingress to Ingress controller and Prometheus; restricts egress to DNS (53), HTTPS (443), PostgreSQL (5432), and Redis (6379).
 
 #### Deploying with Helm:
 ```bash
@@ -253,6 +277,19 @@ python -m sangyan.cli backup restore \
 python -m sangyan.cli backup prune \
   --backup-dir /app/backups \
   --keep-days 30
+
+# Replicate encrypted backup to S3/GCS cloud storage
+python -m sangyan.cli backup upload \
+  --archive /app/backups/sangyan_bkp_20261004_120000_123456_a1b2c3.tar.gz.enc \
+  --bucket my-sangyan-cloud-backups \
+  --prefix backups
+
+# Restore and verify directly from cloud storage
+python -m sangyan.cli backup restore-cloud \
+  --backup-id sangyan_bkp_20261004_120000_123456_a1b2c3 \
+  --bucket my-sangyan-cloud-backups \
+  --target-dir /app/data_cloud_restored \
+  --decrypt-password "YourStrongPasswordHere"
 ```
 
 ### 4. Operational Health Check

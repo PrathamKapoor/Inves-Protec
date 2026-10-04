@@ -57,4 +57,8 @@ spec:
     - ports:
         - protocol: TCP
           port: 5432
+    # Allow Redis egress (cluster-wide rate limiting and auth throttling)
+    - ports:
+        - protocol: TCP
+          port: 6379
 {{- end }}

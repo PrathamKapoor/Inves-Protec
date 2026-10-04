@@ -1,0 +1,156 @@
+# ===========================================================================
+# SANGYAN Distributed Production Values (Multi-Replica Horizontal Scaling)
+# Backed by PostgreSQL for relational & checkpoints, and Redis for rate limiting
+# ===========================================================================
+
+replicaCount: 2
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+image:
+  repository: sangyan
+  pullPolicy: IfNotPresent
+  tag: "0.7.0"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+service:
+  type: ClusterIP
+  port: 8000
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      location /metrics {
+          return 404;
+      }
+  hosts:
+    - host: sangyan.example.gov.in
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: sangyan-tls-cert
+      hosts:
+        - sangyan.example.gov.in
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+probes:
+  liveness:
+    path: /health/live
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /health/ready
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  startup:
+    path: /health/live
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+
+persistence:
+  data:
+    enabled: false
+  checkpoints:
+    enabled: false
+  keys:
+    enabled: true
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+  backups:
+    enabled: true
+    size: 20Gi
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: ""
+
+config:
+  env: production
+  databaseUrl: "postgresql://sangyan:sangyan_secure_pass@postgres-service:5432/sangyan"
+  checkpointBackend: "postgres"
+  checkpointDbPath: ""
+  redisUrl: "redis://redis-service:6379/0"
+  redisFailureMode: "fail_closed_mutations"
+  tracingEnabled: "true"
+  traceSampleRate: 0.2
+  otlpEndpoint: "http://otel-collector.monitoring:4317"
+  backupStorageProvider: "s3"
+  backupS3Bucket: "sangyan-authoritative-backups"
+  backupS3Region: "ap-south-1"
+  backupS3Prefix: "backups/sangyan"
+  keyDir: "/app/keys"
+  backupDir: "/app/backups"
+  allowedOrigins: "https://sangyan.example.gov.in"
+  logLevel: "INFO"
+  jwtAlgorithms: "HS256"
+  jwtIssuer: "sangyan-auth"
+  jwtAudience: "sangyan-api"
+  jwtLeeway: 30
+  rateLimitEnabled: "true"
+  maxRequestBodyBytes: 2097152
+
+secrets:
+  existingSecretName: "sangyan-cluster-secrets"
+  jwtSecret: ""
+  backupEncryptionKey: ""
+
+migration:
+  enabled: true
+  hookDeletePolicy: before-hook-creation,hook-succeeded
+
+backupCron:
+  enabled: true
+  schedule: "0 2 * * *"
+  retentionCount: 14
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+networkPolicy:
+  enabled: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    namespace: "monitoring"
+    interval: 15s

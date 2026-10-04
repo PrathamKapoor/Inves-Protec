@@ -857,6 +857,40 @@ class TenantRepository:
             ),
         )
 
+    def transition_investigation_status(
+        self,
+        inv_id: str,
+        from_status: str,
+        to_status: str,
+        *,
+        summary: str | None = None,
+    ) -> bool:
+        """Atomically transition investigation status from from_status to to_status.
+
+        Uses database-level conditional update for concurrency safety across multiple pods/workers.
+        Returns True if the transition succeeded (1 row updated), False if the investigation was
+        not in from_status or belonged to a different tenant.
+        """
+        self._require_permission("investigation:create")
+        now = time.time()
+        completed_clause = ", completed_at = ?" if to_status in ("COMPLETED", "FAILED", "CANCELLED") else ""
+        summary_clause = ", summary = ?" if summary is not None else ""
+
+        sql = f"""
+        UPDATE sangyan_investigations
+        SET status = ?{completed_clause}{summary_clause}
+        WHERE id = ? AND organization_id = ? AND status = ?
+        """
+        params: list[Any] = [to_status]
+        if completed_clause:
+            params.append(now)
+        if summary_clause:
+            params.append(summary)
+        params.extend([inv_id, self.organization_id, from_status])
+
+        rowcount = self._db.execute(sql, tuple(params))
+        return bool(rowcount and rowcount > 0)
+
     # -----------------------------------------------------------------------
     # Reviews
     # -----------------------------------------------------------------------
@@ -933,32 +967,39 @@ class TenantRepository:
         # Enforce tenant isolation by binding organization_id to metadata
         meta["organization_id"] = self.organization_id
 
-        # Compute chained ledger hash from last audit event
-        last_row = self._db.query_one("SELECT ledger_hash FROM sangyan_audit_events ORDER BY timestamp DESC, id DESC LIMIT 1")
-        prev_hash = last_row["ledger_hash"] if last_row and last_row.get("ledger_hash") else "0" * 64
-
         from sangyan.crypto.hashing import sha3_hex
-        raw_ledger = f"{prev_hash}:{event_id}:{self.user_id}:{action}:{resource}:{result}:{now}"
-        ledger_hash = sha3_hex(raw_ledger.encode("utf-8"))
 
-        self._db.execute(
-            """
-            INSERT INTO sangyan_audit_events
-            (id, event_id, timestamp, actor, action, resource, result, metadata, ledger_hash)
-            VALUES (?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                audit_id,
-                event_id,
-                now,
-                self.user_id,
-                action,
-                resource,
-                result,
-                json.dumps(meta),
-                ledger_hash,
-            ),
-        )
+        with self._db.transaction():
+            if self._db.dialect == "postgresql":
+                try:
+                    self._db.execute("SELECT pg_advisory_xact_lock(918273)")
+                except Exception:
+                    pass
+
+            last_row = self._db.query_one("SELECT ledger_hash FROM sangyan_audit_events ORDER BY timestamp DESC, id DESC LIMIT 1")
+            prev_hash = last_row["ledger_hash"] if last_row and last_row.get("ledger_hash") else "0" * 64
+
+            raw_ledger = f"{prev_hash}:{event_id}:{self.user_id}:{action}:{resource}:{result}:{now}"
+            ledger_hash = sha3_hex(raw_ledger.encode("utf-8"))
+
+            self._db.execute(
+                """
+                INSERT INTO sangyan_audit_events
+                (id, event_id, timestamp, actor, action, resource, result, metadata, ledger_hash)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    audit_id,
+                    event_id,
+                    now,
+                    self.user_id,
+                    action,
+                    resource,
+                    result,
+                    json.dumps(meta),
+                    ledger_hash,
+                ),
+            )
         return audit_id
 
     def list_audit_events(

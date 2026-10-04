@@ -36,8 +36,8 @@ class DatabaseEngine(ABC):
     def connect(self) -> None: ...
 
     @abstractmethod
-    def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
-        """Execute write statement and commit (or enlist in transaction)."""
+    def execute(self, sql: str, params: Sequence[Any] = ()) -> int:
+        """Execute write statement and commit (or enlist in transaction). Returns affected rowcount."""
         ...
 
     @abstractmethod
@@ -90,15 +90,17 @@ class SQLiteDatabaseEngine(DatabaseEngine):
         assert self._conn is not None
         return self._conn
 
-    def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
+    def execute(self, sql: str, params: Sequence[Any] = ()) -> int:
         with self._lock:
             conn = self._get_connection()
             try:
                 if not self._in_transaction:
                     conn.execute("BEGIN IMMEDIATE")
-                conn.execute(sql, tuple(params))
+                cur = conn.execute(sql, tuple(params))
+                rowcount = cur.rowcount
                 if not self._in_transaction:
                     conn.execute("COMMIT")
+                return rowcount
             except sqlite3.IntegrityError as exc:
                 if not self._in_transaction:
                     conn.execute("ROLLBACK")

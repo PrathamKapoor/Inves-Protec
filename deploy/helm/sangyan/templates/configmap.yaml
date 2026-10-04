@@ -22,3 +22,21 @@ data:
   SANGYAN_RATE_LIMIT_ENABLED: {{ .Values.config.rateLimitEnabled | quote }}
   SANGYAN_MAX_REQUEST_BODY_BYTES: {{ .Values.config.maxRequestBodyBytes | quote }}
   SANGYAN_AUTO_MIGRATE: "false"  # Managed exclusively via migration hook Job
+  {{- if .Values.config.redisUrl }}
+  SANGYAN_REDIS_URL: {{ .Values.config.redisUrl | quote }}
+  SANGYAN_REDIS_FAILURE_MODE: {{ .Values.config.redisFailureMode | default "fail_closed_mutations" | quote }}
+  {{- end }}
+  {{- if .Values.config.checkpointBackend }}
+  SANGYAN_CHECKPOINT_BACKEND: {{ .Values.config.checkpointBackend | quote }}
+  {{- end }}
+  {{- if .Values.config.tracingEnabled }}
+  SANGYAN_TRACING_ENABLED: {{ .Values.config.tracingEnabled | quote }}
+  SANGYAN_TRACE_SAMPLE_RATE: {{ .Values.config.traceSampleRate | default 0.1 | quote }}
+  SANGYAN_OTLP_ENDPOINT: {{ .Values.config.otlpEndpoint | default "" | quote }}
+  {{- end }}
+  {{- if .Values.config.backupStorageProvider }}
+  SANGYAN_BACKUP_STORAGE_PROVIDER: {{ .Values.config.backupStorageProvider | quote }}
+  SANGYAN_BACKUP_S3_BUCKET: {{ .Values.config.backupS3Bucket | default "" | quote }}
+  SANGYAN_BACKUP_S3_REGION: {{ .Values.config.backupS3Region | default "ap-south-1" | quote }}
+  SANGYAN_BACKUP_S3_PREFIX: {{ .Values.config.backupS3Prefix | default "backups/sangyan" | quote }}
+  {{- end }}

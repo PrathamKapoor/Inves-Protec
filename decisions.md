@@ -986,6 +986,137 @@ This file is an append-only record of architectural, domain, security, data, and
 - Consequences: Safe, standard-compliant Kubernetes deployment templates validated statically via Helm lint and schema checks.
 - Files: `deploy/helm/sangyan/`
 
+---
+
+### D-059: PostgreSQL Distributed Relational Store, Connection Pooling & Thread-Local Transaction Isolation
+- Date / phase / commit: 2026-10-04, Phase 8
+- Context: In Phase 7, SANGYAN was constrained to a single replica due to SQLite file-level concurrency and lack of distributed connection lifecycle management. Moving to a distributed multi-replica architecture requires PostgreSQL as the authoritative relational source of truth with bounded connection pooling and reliable transaction isolation.
+- Decision: Implemented enhanced PostgreSQL engine architecture (`sangyan/database/postgres.py`, `sangyan/database/engine.py`):
+  1. Bounded Connection Pooling: Backed by `psycopg_pool.ConnectionPool` with configurable `min_size` (default 2), `max_size` (default 20), connection timeout (10s), and automatic recycle.
+  2. Thread-Local Transaction Isolation: Implemented `threading.local()` connection binding within `PostgresDatabaseEngine.transaction()`. Any statement (`execute`, `query_one`, `query_all`) executed inside a thread's `with engine.transaction():` context executes on the exact connection bound to the transaction, guaranteeing atomic commit and rollback behavior.
+  3. Statement Rowcount Reporting: Updated `execute()` to return the integer count of affected rows (`cur.rowcount`), enabling atomic conditional database updates.
+  4. Non-Destructive Dialect Compatibility: Preserved dual SQLite and PostgreSQL engine support. SQLite remains the zero-dependency engine for standalone local unit tests and development, while PostgreSQL serves production multi-replica deployments.
+- Why: Eliminates connection leaks, prevents transaction context split across connections, and enables multi-replica relational consistency.
+- Alternatives considered: SQLAlchemy session management (rejected: heavyweight ORM introduces unnecessary abstraction layers over existing lightweight dataclass mapping).
+- Consequences: Robust, thread-safe, pool-managed PostgreSQL relational persistence.
+- Files: `sangyan/database/postgres.py`, `sangyan/database/engine.py`, `tests/test_database.py`
+
+---
+
+### D-060: LangGraph PostgreSQL Checkpoint Persistence & Tenant Identity Mapping
+- Date / phase / commit: 2026-10-04, Phase 8
+- Context: In Phase 5 and 7, workflow execution checkpoints were persisted in SQLite via `SqliteSaver`. In a multi-replica deployment, an investigation started on Pod A must be inspectable and resumable by Pod B, requiring a shared distributed checkpoint store.
+- Decision: Implemented PostgreSQL-backed LangGraph checkpointing (`sangyan/workflow/checkpointer.py`):
+  1. LangGraph `PostgresSaver` Integration: Integrated `langgraph.checkpoint.postgres.PostgresSaver` backed by psycopg connection pooling.
+  2. Automated Schema Lifecycle: On initialization, checkpointer executes `saver.setup()`, creating and managing `checkpoint_migrations`, `checkpoints`, `checkpoint_writes`, and `checkpoint_blobs` tables idempotently.
+  3. Tenant Thread Identity Preservation: Preserved the canonical composite thread identifier `<organization_id>:<investigation_id>:<run_id>`, with pre-access tenant boundary verification (`validate_thread_access`), ensuring cross-tenant checkpoint access remains impossible.
+  4. Unified Checkpointer Factory: `WorkflowCheckpointer` transparently instantiates either `PostgresSaver`, file-backed `SqliteSaver`, or `InMemorySaver` based on configuration, providing zero code changes to the underlying graph definition.
+  5. Crash Recovery Across Pods: When a pod crashes mid-workflow, any surviving or replacement pod connects to the shared PostgreSQL checkpoint store and resumes execution from the exact last verified node checkpoint.
+- Why: Enables durable, multi-pod workflow orchestration, crash survival, and human-in-the-loop review state persistence.
+- Alternatives considered: Custom relational checkpoint schema (rejected: using LangGraph's standard `PostgresSaver` ensures full compatibility with graph compiler and state reduction semantics).
+- Consequences: Shared distributed workflow durability across all API replicas.
+- Files: `sangyan/workflow/checkpointer.py`, `sangyan/api/app.py`, `tests/test_workflow.py`
+
+---
+
+### D-061: Redis Distributed Rate Limiting & Atomic Lua Script Execution
+- Date / phase / commit: 2026-10-04, Phase 8
+- Context: Phase 6 rate limiting was process-local. In a multi-pod cluster, attackers could partition brute-force attacks across replicas, multiplying effective quotas by the replica count.
+- Decision: Implemented distributed Redis rate limiting and failed-authentication throttling (`sangyan/security/redis_limiter.py`):
+  1. Atomic Token Bucket via Lua: Implemented an atomic Lua script (`CHECK_AND_CONSUME`) that fetches current token count, computes continuous refill based on elapsed time, deducts requested tokens, and writes back the updated count and timestamp atomically in a single Redis round-trip.
+  2. Isolated Key Namespaces: Keys are scoped with explicit prefixes:
+     - Rate limits: `sangyan:ratelimit:<identifier>:<endpoint_class>`
+     - Failed authentication: `sangyan:authfail:<client_ip>`
+  3. Shared Brute-Force Lockout: Failed authentication attempts increment a sliding-window counter in Redis. Reaching the threshold (5 attempts in 60s) triggers an immediate 429 lockout enforced cluster-wide across all pods.
+  4. Endpoint-Differentiated Failure Semantics:
+     - Security-critical mutations (`auth`, `workflow_mutate`, `investigation`): fail-closed (returns HTTP 429 / 503) if Redis is unavailable, preventing abuse during infrastructure degradation.
+     - Read-only inspections (`read`, `health`): fail-open (with local fallback) to maintain read availability during transient Redis partitions.
+- Why: Guarantees strict global rate limit enforcement and distributed brute-force protection across arbitrary replica counts.
+- Alternatives considered: Client-side GET/SET in Python (rejected: non-atomic, susceptible to race conditions and quota overruns).
+- Consequences: Atomic, distributed traffic shaping and brute-force mitigation.
+- Files: `sangyan/security/redis_limiter.py`, `sangyan/security/auth.py`, `tests/test_redis_rate_limiting.py`
+
+---
+
+### D-062: Database-Backed Distributed Review Concurrency & First-Valid-Review Consensus
+- Date / phase / commit: 2026-10-04, Phase 8
+- Context: In Phase 5, review concurrency was enforced via an in-memory `threading.Lock` per investigation. In a multi-pod cluster, two supervisors submitting competing decisions (e.g. CONFIRM vs DISMISS) to different pods would bypass in-process locks, risking split-brain workflow execution.
+- Decision: Replaced in-process locks with database-level atomic conditional state transitions (`sangyan/workflow/service.py`, `sangyan/tenancy/repository.py`):
+  1. Atomic Conditional Transition: Review transitions execute:
+     `UPDATE sangyan_investigations SET status = 'FINALIZING', updated_at = %s WHERE id = %s AND organization_id = %s AND status = 'AWAITING_REVIEW'`
+  2. First-Valid-Review Wins: Exactly one update statement modifies 1 row. Any competing simultaneous review request finds 0 rows matching status `AWAITING_REVIEW` and is immediately rejected with `ReviewConflictError` (HTTP 409).
+  3. Workflow Lock Removal: Removed reliance on process-local `self._investigation_locks` for review decisions, ensuring consistency is governed exclusively by the database transaction boundary.
+  4. State Audit Binding: The winning review decision atomically commits an audit ledger entry and advances the LangGraph state.
+- Why: Guarantees that conflicting review decisions submitted across multiple pods resolve deterministically with zero double-finalization.
+- Alternatives considered: Distributed Redis locks (rejected: adds external dependency to core relational integrity; PostgreSQL atomic conditional update is simpler, ACID-compliant, and cannot deadlock).
+- Consequences: Multi-pod review race safety with strict first-valid-review consensus.
+- Files: `sangyan/workflow/service.py`, `sangyan/tenancy/repository.py`, `tests/test_distributed_concurrency.py`
+
+---
+
+### D-063: Distributed Idempotency & Serialized Chained Audit Ledger
+- Date / phase / commit: 2026-10-04, Phase 8
+- Context: Concurrent requests across multiple pods can trigger duplicate workflow runs, duplicate trust receipts, or branching audit ledger hashes if operations are not strictly idempotent and serialized.
+- Decision: Implemented cluster-wide idempotency and audit ledger serialization (`sangyan/tenancy/repository.py`, `sangyan/verification/trust_binding.py`):
+  1. Trust Receipt Idempotency: `TrustBindingService` and repository check for existing receipts matching the canonical target digest before signing. Concurrent finalization requests return the existing canonical `TrustReceipt` without creating duplicate cryptographic artifacts.
+  2. Chained Audit Ledger Serialization: Appending to `sangyan_audit_events` is executed inside a transaction with table-level serialization (`SELECT pg_advisory_xact_lock(918273)` in PostgreSQL, `BEGIN IMMEDIATE` in SQLite). The predecessor hash `prev_hash` is queried and chained within the lock, ensuring the cryptographic hash chain is strictly linear without forks.
+  3. Workflow Start Idempotency: Workflow start requests with matching `run_id` or client idempotency keys detect existing runs and return the active state rather than spawning duplicate executions.
+- Why: Preserves evidentiary audit chain integrity and cryptographic trust receipts under high concurrent load across multiple replicas.
+- Alternatives considered: Asynchronous background audit logging (rejected: breaks tamper-evident chaining and loses synchronous non-repudiation).
+- Consequences: Linear, verifiable SHA3-256 audit ledger and idempotent trust finalization.
+- Files: `sangyan/tenancy/repository.py`, `sangyan/verification/trust_binding.py`, `tests/test_distributed_concurrency.py`
+
+---
+
+### D-064: Cloud Backup Replication, S3-Compatible Storage & Remote Disaster Recovery
+- Date / phase / commit: 2026-10-04, Phase 8
+- Context: Local backups stored on container volumes are vulnerable to datacenter failures, volume deletion, or host corruption. Distributed production resilience requires offsite cloud backup replication.
+- Decision: Implemented cloud backup replication engine (`sangyan/database/cloud_backup.py`, `sangyan/database/backup.py`, `sangyan/cli.py`):
+  1. S3-Compatible Cloud Storage Adapter: Implemented `S3BackupStorage` using `boto3` supporting AWS S3, Cloudflare R2, Google Cloud Storage (via S3 API), and local MinIO.
+  2. Pre-Upload Cryptographic Guarantee: Backups are encrypted locally with AES-256-GCM and SHA-256 checksummed BEFORE any cloud transmission. Plaintext databases, checkpoint stores, and raw signing keys are NEVER transmitted to cloud object storage.
+  3. Automated Upload & Verification: After upload, the engine performs remote integrity verification: checking object existence, remote size matching local size, and metadata validation.
+  4. Safe Retention Pruning: Cloud backups older than the retention threshold are pruned only after a new backup has been verified successfully. The newest verified backup is NEVER deleted.
+  5. Isolated Remote Disaster Recovery: Implemented `restore_from_cloud()`: downloads remote encrypted archive, validates SHA-256 checksum against manifest, decrypts using operator key, performs safe tarball extraction, runs `PRAGMA integrity_check`, and validates schema version.
+- Why: Provides complete disaster recovery capability against catastrophic infrastructure loss.
+- Alternatives considered: Direct database replication to RDS/Aurora (complements, but does not replace, immutable point-in-time cryptographic backups).
+- Consequences: Offsite, tamper-evident, verifiable cloud backup replication and disaster recovery.
+- Files: `sangyan/database/cloud_backup.py`, `sangyan/database/backup.py`, `sangyan/cli.py`, `tests/test_cloud_backup.py`
+
+---
+
+### D-065: OpenTelemetry Distributed Tracing & Privacy-Preserving Telemetry
+- Date / phase / commit: 2026-10-04, Phase 8
+- Context: Operating a multi-pod distributed architecture requires end-to-end trace correlation across ingress, API pods, database queries, Redis calls, and workflow node executions, while strictly protecting sensitive investor data from log and trace leaks.
+- Decision: Implemented OpenTelemetry tracing framework (`sangyan/security/tracing.py`, `sangyan/security/telemetry.py`):
+  1. Distributed Span Propagation: Traces propagate across HTTP boundary (`traceparent` header) and correlate via `X-Request-ID`.
+  2. Comprehensive Span Hierarchy: Spans capture HTTP requests, authentication verification, route dispatch, LangGraph node transitions, database queries, and trust signing operations.
+  3. Strict Privacy Guardrail: Attribute values are scrubbed via `redact_sensitive_text`. Content item bodies, claim text, personal identifiable information (phone numbers, emails, VPAs), JWT tokens, and API keys are strictly excluded from span attributes.
+  4. Configurable Trace Sampling: Supports head-based probabilistic sampling (`SANGYAN_TRACE_SAMPLE_RATE`, default 1.0 in dev, 0.1 in high-volume prod), while ensuring error spans and security violations are always recorded.
+  5. Low-Cardinality Metric Preservation: Prometheus metrics continue to normalize dynamic route IDs to bounded templates to prevent cardinality explosion across multiple pods.
+- Why: Delivers distributed observability and performance diagnostics without compromising investor privacy or security credentials.
+- Alternatives considered: Proprietary APM agents (rejected: vendor lock-in; OpenTelemetry is the open industry standard).
+- Consequences: High-visibility, privacy-compliant distributed tracing.
+- Files: `sangyan/security/tracing.py`, `sangyan/security/telemetry.py`, `tests/test_tracing.py`
+
+---
+
+### D-066: Horizontal Multi-Replica Scaling & Distributed Kubernetes Architecture
+- Date / phase / commit: 2026-10-04, Phase 8
+- Context: With relational state in PostgreSQL, workflow checkpoints in PostgresSaver, rate limiting in Redis, and locks eliminated from process memory, the Phase 7 single-replica constraint can be safely lifted to enable horizontal scaling.
+- Decision: Updated Helm chart and deployment topology for multi-replica operation (`deploy/helm/sangyan/`):
+  1. Multi-Replica Deployment: Updated `replicaCount` to default to 2 (configurable) in `values.yaml` and relaxed `values.schema.json` to allow `replicaCount >= 1`.
+  2. HorizontalPodAutoscaler (HPA): Added HPA template scaling between 2 and 10 pods based on CPU (75%) and memory (80%) utilization.
+  3. Distributed Health Probes:
+     - `/health/live`: Process responsiveness check.
+     - `/health/ready`: Validates PostgreSQL connection, migration currency, and Redis availability (per configured failure mode).
+  4. NetworkPolicy Hardening: Explicit egress rules permit traffic to PostgreSQL (port 5432), Redis (port 6379), and Cloud Object Storage HTTPS (port 443).
+  5. Multi-Instance Compose Environment: Configured `docker-compose.distributed.yml` running `api-1`, `api-2`, `postgres`, and `redis` for local distributed verification.
+- Why: Achieves true horizontal scalability, high availability, and failover resilience.
+- Alternatives considered: Keeping single replica (rejected: fails to meet distributed production requirements of Phase 8).
+- Consequences: Horizontally scalable, zero-single-point-of-failure deployment architecture.
+- Files: `deploy/helm/sangyan/`, `docker-compose.distributed.yml`
+
+
 
 
 
