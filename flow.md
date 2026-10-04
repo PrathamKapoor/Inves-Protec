@@ -528,15 +528,15 @@ Isolated Disaster Recovery Verification:
 | HTTP Transport Security Hardening | Defensive headers (nosniff, DENY, CSP), Cache-Control: no-store on API, 2 MB body bound, X-Request-ID | `sangyan/security/middleware.py`, `sangyan/api/app.py` | 28d9fbc | D-049 |
 | Low-Cardinality Telemetry & Redaction | Bounded Prometheus /metrics exporter, route normalizer, and sensitive credential log redaction | `sangyan/security/telemetry.py` | 28d9fbc | D-050 |
 | Phase 6 Security Test Suite | 32 new tests covering JWT, API keys, RBAC, IDOR, rate limiting, security headers, metrics (total 177 tests) | `tests/test_security_phase6.py`, `tests/test_database.py` | 28d9fbc | D-044..D-050 |
-| Container Packaging & Hardening | Non-root UID 10001 multi-stage Docker build, read-only rootfs, dedicated volumes, no secrets | `Dockerfile`, `.dockerignore` | Pending | D-051 |
-| Single-Replica Production Topology | Enforced replicas: 1 model for token buckets, SQLite WAL, and thread locks; zero multi-replica drift | `deploy/helm/`, `docker-compose.yml` | Pending | D-052 |
-| Production Configuration Validation | Fail-closed validate_production_config (entropy >= 32, no defaults, no wildcard CORS, auth required) | `sangyan/config.py` | Pending | D-053 |
-| Decoupled Health Semantics | Explicit /health/live (process), /health/ready (DB/migrations), /health with zero secret disclosure | `sangyan/api/app.py`, `sangyan/cli.py` | Pending | D-054 |
-| Durable Workflow Checkpointing | File-backed SQLite WAL SqliteSaver checkpointer persisted in /app/checkpoints across restarts | `sangyan/api/app.py` | Pending | D-055 |
-| Migration Lifecycle & Concurrency | Transactional double-check lock for SQLite, pg_advisory_lock for Postgres, pre-rollout Job hook | `sangyan/database/migrations.py`, `deploy/helm/` | Pending | D-056 |
-| Cryptographic Backup & Safe Restore | Online VACUUM snapshot, AES-256-GCM + PBKDF2 encryption, SHA-256 manifest, traversal-safe restore | `sangyan/database/backup.py`, `sangyan/cli.py` | Pending | D-057 |
-| Production Kubernetes & Helm Deployment | Helm chart with non-root securityContext, Ingress TLS, NetworkPolicy, Job, and CronJob | `deploy/helm/sangyan/` | Pending | D-058 |
-| Phase 7 Verification Suite | 28 new tests covering config, health, backups, migrations, container and k8s manifests (total 205 tests) | `tests/test_*.py` | Pending | D-051..D-058 |
+| Container Packaging & Hardening | Non-root UID 10001 multi-stage Docker build, read-only rootfs, dedicated volumes, no secrets | `Dockerfile`, `.dockerignore` | a7b6504 | D-051 |
+| Single-Replica Production Topology | Enforced replicas: 1 model for token buckets, SQLite WAL, and thread locks; zero multi-replica drift | `deploy/helm/`, `docker-compose.yml` | a7b6504 | D-052 |
+| Production Configuration Validation | Fail-closed validate_production_config (entropy >= 32, no defaults, no wildcard CORS, auth required) | `sangyan/config.py` | a7b6504 | D-053 |
+| Decoupled Health Semantics | Explicit /health/live (process), /health/ready (DB/migrations), /health with zero secret disclosure | `sangyan/api/app.py`, `sangyan/cli.py` | a7b6504 | D-054 |
+| Durable Workflow Checkpointing | File-backed SQLite WAL SqliteSaver checkpointer persisted in /app/checkpoints across restarts | `sangyan/api/app.py` | a7b6504 | D-055 |
+| Migration Lifecycle & Concurrency | Transactional double-check lock for SQLite, pg_advisory_lock for Postgres, pre-rollout Job hook | `sangyan/database/migrations.py`, `deploy/helm/` | a7b6504 | D-056 |
+| Cryptographic Backup & Safe Restore | Online VACUUM snapshot, AES-256-GCM + PBKDF2 encryption, SHA-256 manifest, traversal-safe restore | `sangyan/database/backup.py`, `sangyan/cli.py` | a7b6504 | D-057 |
+| Production Kubernetes & Helm Deployment | Helm chart with non-root securityContext, Ingress TLS, NetworkPolicy, Job, and CronJob | `deploy/helm/sangyan/` | a7b6504 | D-058 |
+| Phase 7 Verification Suite | 28 new tests covering config, health, backups, migrations, container and k8s manifests (total 205 tests) | `tests/test_*.py` | a7b6504 | D-051..D-058 |
 
 
 
