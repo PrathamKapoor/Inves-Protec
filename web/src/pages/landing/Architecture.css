@@ -1,0 +1,51 @@
+.arch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.5rem;
+}
+
+.arch-layer-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1.25rem;
+}
+
+.arch-layer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.arch-layer-num {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--brand-bright);
+}
+
+.arch-layer-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-1);
+  margin-top: 0.25rem;
+}
+
+.arch-layer-desc {
+  font-size: 0.875rem;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.arch-layer-footer {
+  padding-top: 1rem;
+  border-top: 1px solid var(--line-subtle);
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-3);
+}

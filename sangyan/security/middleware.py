@@ -49,9 +49,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' data: https://fonts.gstatic.com; "
-            "script-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
             "img-src 'self' data: https:; "
-            "connect-src 'self'"
+            "connect-src 'self' ws: wss:; "
+            "worker-src 'self' blob:;"
         )
 
         # Prevent browser and proxy caching of sensitive grievance / investigation endpoints

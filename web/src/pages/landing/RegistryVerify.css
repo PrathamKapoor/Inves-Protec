@@ -1,0 +1,71 @@
+.tiers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.25rem;
+}
+
+.tier-card {
+  padding: 1.5rem;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tier-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tier-tag {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-xs);
+}
+
+.tier-tag-t0 {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.tier-tag-t1 {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.tier-tag-t2 {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.tier-tag-other {
+  background: var(--bg-3);
+  color: var(--text-2);
+  border: 1px solid var(--line);
+}
+
+.tier-name {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.tier-entities {
+  font-size: 0.8125rem;
+  color: var(--brand-bright);
+  font-family: var(--font-mono);
+}
+
+.tier-role {
+  font-size: 0.875rem;
+  color: var(--text-2);
+  line-height: 1.5;
+}

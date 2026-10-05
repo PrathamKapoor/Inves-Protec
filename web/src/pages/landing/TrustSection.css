@@ -1,0 +1,71 @@
+.trust-wrapper {
+  background: var(--bg-1);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.trust-receipt-card {
+  background: var(--bg-0);
+  border: 1px solid var(--line-accent);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), var(--shadow-glow);
+  font-family: var(--font-mono);
+}
+
+.trust-receipt-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.trust-receipt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.trust-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.trust-label {
+  font-size: 0.72rem;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.trust-val {
+  font-size: 0.85rem;
+  color: var(--text-1);
+  word-break: break-all;
+}
+
+.trust-hash-box {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+  font-size: 0.8rem;
+  color: var(--accent-cyan);
+  word-break: break-all;
+}
+
+.trust-verify-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+  gap: 1rem;
+}

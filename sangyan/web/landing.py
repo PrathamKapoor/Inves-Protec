@@ -6,6 +6,10 @@ and trustsat.mpst.me (cryptographic authority, evidence provenance, post-quantum
 """
 from __future__ import annotations
 
+from pathlib import Path
+
+_DIST_INDEX = Path(__file__).resolve().parent.parent.parent / "web" / "dist" / "index.html"
+
 
 def render_landing_page() -> str:
     """Generate the complete self-contained HTML for the SANGYAN Landing Page."""

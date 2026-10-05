@@ -290,6 +290,12 @@ def create_app(
     app.include_router(api_router)
     app.include_router(views_router)
 
+    from pathlib import Path
+    _dist_assets = Path(__file__).resolve().parent.parent.parent / "web" / "dist" / "assets"
+    if _dist_assets.exists():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/assets", StaticFiles(directory=str(_dist_assets)), name="assets")
+
     # -----------------------------------------------------------------------
     # Operational Health Probes
     # -----------------------------------------------------------------------

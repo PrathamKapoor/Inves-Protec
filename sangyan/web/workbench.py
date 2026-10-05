@@ -8,8 +8,11 @@ and statutory grievance routing (SEBI SCORES & 1930 Cybercrime).
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Dict
 from sangyan.web.demo_fixtures import DEMO_CASES
+
+_DIST_INDEX = Path(__file__).resolve().parent.parent.parent / "web" / "dist" / "index.html"
 
 
 def render_workbench_page() -> str:

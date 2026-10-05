@@ -1,0 +1,78 @@
+/* SANGYAN Design Tokens
+   Cryptographic Authority & Post-Quantum Evidence Palette
+   Consistent theme driven by the WebGL Grainient palette:
+   Electric violet (#5227FF / #8B5CF6), deep obsidian indigo,
+   statutory emerald (#10B981), and fraud alarm coral (#EF4444).
+*/
+
+:root {
+  /* Canvas & Surfaces */
+  --bg-0: #06080e;
+  --bg-1: #0a0d17;
+  --bg-2: #0f1423;
+  --bg-3: #151c2f;
+  --bg-4: #1b243b;
+
+  /* Subtle Hairlines & Micro-borders */
+  --line: rgba(255, 255, 255, 0.08);
+  --line-subtle: rgba(255, 255, 255, 0.04);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --line-accent: rgba(139, 92, 246, 0.45);
+  --line-cyan: rgba(56, 189, 248, 0.4);
+
+  /* Typography Colors */
+  --text-1: #f8fafc;
+  --text-2: #94a3b8;
+  --text-3: #64748b;
+  --text-inverse: #06080e;
+
+  /* Brand Accents */
+  --brand-primary: #8b5cf6;
+  --brand-deep: #5227ff;
+  --brand-bright: #a78bfa;
+  --brand-glow: rgba(139, 92, 246, 0.28);
+  --brand-dim: rgba(139, 92, 246, 0.12);
+
+  --accent-cyan: #38bdf8;
+  --accent-cyan-dim: rgba(56, 189, 248, 0.12);
+  --accent-cyan-glow: rgba(56, 189, 248, 0.25);
+
+  /* Status Colors */
+  --ok: #10b981;
+  --ok-dim: rgba(16, 185, 129, 0.12);
+  --ok-glow: rgba(16, 185, 129, 0.25);
+
+  --fail: #ef4444;
+  --fail-dim: rgba(239, 68, 68, 0.12);
+  --fail-glow: rgba(239, 68, 68, 0.25);
+
+  --warn: #f59e0b;
+  --warn-dim: rgba(245, 158, 11, 0.12);
+  --warn-glow: rgba(245, 158, 11, 0.25);
+
+  --pqc: #38bdf8;
+  --pqc-dim: rgba(56, 189, 248, 0.12);
+  --pqc-glow: rgba(56, 189, 248, 0.3);
+
+  /* Fonts */
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+
+  /* Radii */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 26px;
+  --radius-pill: 9999px;
+
+  /* Layout Containers */
+  --container-max: 1200px;
+  --container-wide: 1400px;
+
+  /* Shadows */
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-card: 0 8px 32px rgba(0, 0, 0, 0.55);
+  --shadow-glow: 0 0 50px rgba(139, 92, 246, 0.18);
+  --shadow-glow-cyan: 0 0 50px rgba(56, 189, 248, 0.18);
+}

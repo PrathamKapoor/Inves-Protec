@@ -1,0 +1,33 @@
+.final-cta-card {
+  background: linear-gradient(135deg, rgba(82, 39, 255, 0.15) 0%, rgba(139, 92, 246, 0.05) 50%, rgba(6, 8, 14, 0.8) 100%);
+  border: 1px solid var(--line-accent);
+  border-radius: var(--radius-xl);
+  padding: 5rem 2rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), var(--shadow-glow);
+}
+
+.final-cta-title {
+  font-size: clamp(2rem, 4vw, 3rem);
+  font-weight: 800;
+  color: var(--text-1);
+  margin-bottom: 1.25rem;
+}
+
+.final-cta-desc {
+  font-size: 1.125rem;
+  color: var(--text-2);
+  max-width: 680px;
+  margin: 0 auto 2.5rem;
+  line-height: 1.6;
+}
+
+.final-cta-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}

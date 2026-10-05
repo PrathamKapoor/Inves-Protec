@@ -49,6 +49,11 @@ def get_views_router(
         """Direct alias for investigation workbench."""
         return HTMLResponse(content=render_workbench_page())
 
+    @router.get("/console", response_class=HTMLResponse)
+    def console_page():
+        """Direct route for interactive investigation console."""
+        return HTMLResponse(content=render_workbench_page())
+
     # -----------------------------------------------------------------------
     # Interactive Walkthrough & Demo API Endpoints
     # -----------------------------------------------------------------------
